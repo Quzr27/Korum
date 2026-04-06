@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+src-tauri/target/
+
+# Tauri build artifacts
+*.dmg
+*.app
+*.deb
+*.AppImage
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Editor config
+.editorconfig
+
+# Environment
+.env
+.env.*
+
+# Claude Code
+.claude/
+CLAUDE.md
+skills-lock.json
+
+# Codex
+.agents/
+AGENTS.md
+
+# Logs
+*.log

@@ -1,0 +1,74 @@
+/* ── Canvas ── */
+.canvas-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  isolation: isolate;
+}
+
+.canvas-viewport.panning {
+  cursor: grabbing;
+}
+
+
+.canvas-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+  z-index: 2;
+}
+
+/* ── Canvas background ── */
+.canvas-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 18% 16%, var(--canvas-glow-1) 0%, transparent 34%),
+    radial-gradient(circle at 84% 14%, var(--canvas-glow-2) 0%, transparent 32%),
+    radial-gradient(circle at 50% 100%, var(--canvas-glow-3) 0%, transparent 48%),
+    linear-gradient(180deg, var(--canvas-top) 0%, var(--canvas-bottom) 100%);
+  pointer-events: none;
+}
+
+.canvas-bg::before,
+.canvas-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.canvas-bg::before {
+  inset: -10%;
+  background: var(--canvas-mesh);
+  opacity: var(--canvas-mesh-opacity);
+  filter: blur(var(--canvas-blur));
+  transform: translateZ(0);
+  will-change: filter;
+  transition: filter 0.3s ease;
+}
+
+/* Suppress expensive blur during pan/zoom to avoid GPU thrash */
+.canvas-viewport.panning .canvas-bg::before,
+.canvas-viewport.zooming .canvas-bg::before {
+  filter: blur(0px);
+  transition: none;
+}
+
+.canvas-bg::after {
+  inset: -10%;
+  background: var(--canvas-vignette);
+}
+
+/* ── Canvas dot grid ── */
+.canvas-dots {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  opacity: var(--canvas-grid-opacity);
+  pointer-events: none;
+}

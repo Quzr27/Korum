@@ -1,0 +1,97 @@
+/* ── Note ── */
+.note-editor {
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.7;
+  outline: none;
+}
+
+.note-editor::placeholder {
+  color: var(--muted-foreground);
+  opacity: 0.5;
+}
+
+.note-preview {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  padding: 10px 14px;
+  cursor: text;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.note-preview:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* Markdown rendered content — aggressive scale for 13px base */
+.note-preview h1 { font-size: 1.85em; font-weight: 800; margin: 0.5em 0 0.25em; letter-spacing: -0.03em; line-height: 1.2; }
+.note-preview h2 { font-size: 1.45em; font-weight: 700; margin: 0.45em 0 0.2em; letter-spacing: -0.02em; line-height: 1.25; }
+.note-preview h3 { font-size: 1.2em; font-weight: 700; margin: 0.4em 0 0.2em; letter-spacing: -0.01em; line-height: 1.3; }
+.note-preview h4 { font-size: 1.05em; font-weight: 600; margin: 0.35em 0 0.15em; }
+.note-preview h5,
+.note-preview h6 { font-size: 1em; font-weight: 600; margin: 0.3em 0 0.15em; color: var(--muted-foreground); }
+
+.note-preview p { margin: 0.35em 0; }
+.note-preview strong { font-weight: 700; }
+.note-preview em { font-style: italic; }
+
+.note-preview ul,
+.note-preview ol { margin: 0.3em 0; padding-left: 1.4em; }
+.note-preview li { margin: 0.15em 0; }
+.note-preview ul li { list-style-type: disc; }
+.note-preview ol li { list-style-type: decimal; }
+
+.note-preview code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.88em;
+  padding: 0.15em 0.35em;
+  border-radius: calc(var(--radius) * 0.6);
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.note-preview pre {
+  margin: 0.5em 0;
+  padding: 0.7em 0.9em;
+  border-radius: calc(var(--radius) * 1);
+  background: color-mix(in oklch, var(--accent) 85%, var(--border));
+  overflow-x: auto;
+}
+.note-preview pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.note-preview blockquote {
+  margin: 0.4em 0;
+  padding-left: 0.9em;
+  border-left: 3px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+.note-preview hr {
+  margin: 0.6em 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+.note-preview a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.note-preview img {
+  max-width: 100%;
+  border-radius: calc(var(--radius) * 0.8);
+}

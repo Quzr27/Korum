@@ -1,0 +1,93 @@
+/* ── Terminal window ── */
+.window {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  contain: layout paint;
+  border-radius: calc(var(--radius) * 1.4);
+  background: var(--term-bg, var(--card));
+  box-shadow:
+    0 0 0 1px var(--term-border, var(--border)),
+    0 6px 20px rgba(0, 0, 0, 0.35);
+  transition: box-shadow 0.15s ease;
+}
+
+.window[data-active="true"] {
+  box-shadow:
+    0 0 0 1px var(--term-border, var(--border)),
+    0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+.window-titlebar {
+  position: relative;
+  display: flex;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  background: var(--term-titlebar, var(--secondary));
+  border-bottom: 1px solid var(--term-border, var(--border));
+  cursor: move;
+  user-select: none;
+}
+
+/* Active window: title text in workspace color */
+.window[data-active="true"] .window-title {
+  color: var(--ws-accent, var(--muted-foreground));
+}
+
+.window-title {
+  overflow: hidden;
+  max-width: calc(100% - 40px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Close — appears on titlebar hover */
+.window-close {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+  cursor: pointer;
+}
+
+.window-titlebar:hover .window-close {
+  opacity: 1;
+}
+
+.window-close:hover {
+  background: var(--destructive);
+  color: white;
+}
+
+.window-content {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Resize handles ── */
+.resize-edge {
+  position: absolute;
+}
+.resize-edge[data-edge="n"] { top: -3px; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.resize-edge[data-edge="s"] { bottom: -3px; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.resize-edge[data-edge="w"] { left: -3px; top: 6px; bottom: 6px; width: 6px; cursor: ew-resize; }
+.resize-edge[data-edge="e"] { right: -3px; top: 6px; bottom: 6px; width: 6px; cursor: ew-resize; }
+.resize-edge[data-edge="nw"] { top: -3px; left: -3px; width: 10px; height: 10px; cursor: nwse-resize; }
+.resize-edge[data-edge="ne"] { top: -3px; right: -3px; width: 10px; height: 10px; cursor: nesw-resize; }
+.resize-edge[data-edge="sw"] { bottom: -3px; left: -3px; width: 10px; height: 10px; cursor: nesw-resize; }
+.resize-edge[data-edge="se"] { bottom: -3px; right: -3px; width: 10px; height: 10px; cursor: nwse-resize; }

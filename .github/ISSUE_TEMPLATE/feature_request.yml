@@ -1,0 +1,33 @@
+name: Feature Request
+description: Suggest a feature for Korum
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping shape Korum — all ideas welcome.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature description
+      description: A clear description of what you'd like.
+      placeholder: |
+        I would like to...
+        Example: ability to group terminals or save layouts
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+      description: What problem does this solve or what workflow does it improve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or alternatives you've thought of (optional).

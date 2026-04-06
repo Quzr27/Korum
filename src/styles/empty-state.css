@@ -1,0 +1,314 @@
+/* ── Empty state: brand shell (glow border around logo) ── */
+.es-stage {
+  opacity: 0;
+  animation: es-fade-in 1.15s ease-out 90ms forwards;
+}
+
+.es-stage::before,
+.es-stage::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  pointer-events: none;
+}
+
+.es-stage::before {
+  inset: 20%;
+  background:
+    radial-gradient(circle, color-mix(in oklch, var(--primary) 14%, transparent) 0%, transparent 70%);
+  filter: blur(34px);
+  opacity: 0.58;
+  animation: es-breathe 16s ease-in-out infinite;
+}
+
+.es-stage::after {
+  inset: 14%;
+  background:
+    radial-gradient(circle, color-mix(in oklch, var(--foreground) 6%, transparent) 0%, transparent 72%);
+  filter: blur(12px);
+  opacity: 0.42;
+  animation: es-breathe 20s ease-in-out infinite reverse;
+}
+
+.es-brand-shell::before,
+.es-brand-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: calc(var(--brand-mark-size) * 0.24);
+  pointer-events: none;
+}
+
+.es-brand-shell::before {
+  border: 1px solid color-mix(in oklch, var(--foreground) 9%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in oklch, white 18%, transparent);
+}
+
+.es-brand-shell::after {
+  inset: -10px;
+  border-radius: calc(var(--brand-mark-size) * 0.34);
+  background:
+    radial-gradient(circle, color-mix(in oklch, var(--foreground) 7%, transparent) 0%, transparent 72%);
+  opacity: 0.55;
+}
+
+.dark .es-brand-shell::before {
+  border-color: color-mix(in oklch, white 14%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, white 3%, transparent),
+    inset 0 1px 0 color-mix(in oklch, white 8%, transparent);
+}
+
+.dark .es-brand-shell::after {
+  background:
+    radial-gradient(circle, color-mix(in oklch, white 11%, transparent) 0%, transparent 74%);
+  opacity: 0.82;
+}
+
+/* ── Signal field ── */
+.es-pulse-ring,
+.es-sweep-ring,
+.es-tracer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 9999px;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.es-pulse-ring {
+  border: 1px solid color-mix(in oklch, var(--foreground) 10%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklch, white 12%, transparent),
+    0 0 0 1px color-mix(in oklch, var(--foreground) 2%, transparent);
+  opacity: 0;
+  animation: es-ring-pulse 8.4s ease-out infinite;
+}
+
+.es-pulse-ring-1 {
+  width: 186px;
+  height: 186px;
+}
+
+.es-pulse-ring-2 {
+  width: 254px;
+  height: 254px;
+  animation-delay: 2.8s;
+}
+
+.es-pulse-ring-3 {
+  width: 330px;
+  height: 330px;
+  animation-delay: 5.6s;
+}
+
+.es-sweep-ring {
+  width: 276px;
+  height: 276px;
+  background:
+    conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      transparent 292deg,
+      color-mix(in oklch, var(--foreground) 22%, transparent) 316deg,
+      transparent 344deg,
+      transparent 360deg
+    );
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), black calc(100% - 1px));
+  opacity: 0.48;
+  will-change: transform;
+  animation: es-sweep 18s linear infinite;
+}
+
+.es-tracer {
+  transform-origin: center;
+  will-change: transform;
+}
+
+.es-tracer::before {
+  content: "";
+  position: absolute;
+  left: calc(100% - 1px);
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  transform: translate(-50%, -50%);
+  background: color-mix(in oklch, var(--foreground) 84%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--foreground) 8%, transparent);
+}
+
+.es-tracer-1 {
+  width: 168px;
+  height: 168px;
+  animation: es-orbit 14s linear infinite;
+}
+
+.es-tracer-2 {
+  width: 372px;
+  height: 372px;
+  animation: es-orbit 22s linear infinite reverse;
+}
+
+.es-guide {
+  stroke: color-mix(in oklch, var(--foreground) 16%, transparent);
+  stroke-width: 0.8;
+  stroke-linecap: round;
+  opacity: 0.2;
+}
+
+.es-arc {
+  fill: none;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.es-arc-1 {
+  stroke: color-mix(in oklch, var(--foreground) 28%, transparent);
+  stroke-dasharray: 0.15 0.13 0.04 0.68;
+  stroke-width: 1;
+  opacity: 0.26;
+  animation: es-orbit 24s linear infinite;
+}
+
+.es-arc-2 {
+  stroke: color-mix(in oklch, var(--primary) 42%, transparent);
+  stroke-dasharray: 0.09 0.14 0.04 0.73;
+  stroke-width: 0.95;
+  opacity: 0.22;
+  animation: es-orbit 38s linear infinite reverse;
+}
+
+.es-arc-3 {
+  stroke: color-mix(in oklch, var(--foreground) 22%, transparent);
+  stroke-dasharray: 0.07 0.18 0.03 0.72;
+  stroke-width: 0.8;
+  opacity: 0.14;
+  animation: es-orbit 52s linear infinite;
+}
+
+.es-arc-4 {
+  stroke: color-mix(in oklch, var(--foreground) 18%, transparent);
+  stroke-dasharray: 0.04 0.22 0.03 0.71;
+  stroke-width: 0.72;
+  opacity: 0.09;
+  animation: es-orbit 66s linear infinite reverse;
+}
+
+.es-constellation {
+  fill: none;
+  stroke: color-mix(in oklch, var(--foreground) 18%, transparent);
+  stroke-linecap: round;
+  stroke-width: 1;
+  opacity: 0.32;
+}
+
+.es-constellation-1 {
+  stroke-dasharray: 2 6;
+  animation: es-constellation-glow 10s ease-in-out infinite;
+}
+
+.es-constellation-2 {
+  stroke-dasharray: 2 7;
+  animation: es-constellation-glow 12s ease-in-out infinite reverse;
+}
+
+.es-node {
+  fill: color-mix(in oklch, var(--foreground) 88%, transparent);
+  opacity: 0;
+  animation: es-dot-pulse 5.4s ease-in-out infinite;
+}
+
+.es-node-1 { animation-delay: -0.2s; }
+.es-node-2 { animation-delay: 1.4s; }
+.es-node-3 { animation-delay: 2.8s; }
+.es-node-4 { animation-delay: 4.2s; }
+
+/* ── Entry animations ── */
+.es-rise       { animation: es-rise 620ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.es-rise-1     { animation-delay: 100ms; }
+.es-rise-2     { animation-delay: 200ms; }
+
+.es-cta-shimmer { position: relative; overflow: hidden; }
+.es-cta-shimmer::before {
+  content: "";
+  position: absolute;
+  inset: -1px auto -1px -40%;
+  width: 32%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+  transform: skewX(-18deg);
+  animation: es-shimmer 4.8s ease-in-out infinite;
+}
+
+/* ── Keyframes ── */
+@keyframes es-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes es-rise {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes es-breathe {
+  0%, 100% { transform: scale(0.98); opacity: 0.42; }
+  50%      { transform: scale(1.04); opacity: 0.72; }
+}
+
+@keyframes es-orbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes es-sweep {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to   { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+@keyframes es-ring-pulse {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.94); }
+  18%  { opacity: 0.42; }
+  62%  { opacity: 0.16; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.08); }
+}
+
+@keyframes es-dot-pulse {
+  0%, 100% { opacity: 0; }
+  35%, 65% { opacity: 0.72; }
+}
+
+@keyframes es-constellation-glow {
+  0%, 100% { opacity: 0.16; }
+  50%      { opacity: 0.34; }
+}
+
+@keyframes es-shimmer {
+  0%, 62%, 100% { transform: translateX(0) skewX(-18deg);   opacity: 0; }
+  70%           { transform: translateX(220%) skewX(-18deg); opacity: 1; }
+  78%           { transform: translateX(340%) skewX(-18deg); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .es-stage, .es-stage::before, .es-stage::after,
+  .es-pulse-ring, .es-sweep-ring, .es-tracer,
+  .es-arc, .es-constellation, .es-node,
+  .es-rise, .es-rise-1, .es-rise-2, .es-cta-shimmer::before {
+    animation: none !important;
+  }
+  /* Disable blur on stage pseudos when motion is reduced */
+  .es-stage::before,
+  .es-stage::after {
+    filter: none !important;
+  }
+  /* Show static state — entry elements visible, decorative at resting opacity */
+  .es-stage { opacity: 1 !important; }
+  .es-rise, .es-rise-1, .es-rise-2 { opacity: 1 !important; }
+  .es-pulse-ring { opacity: 0.2 !important; }
+  .es-sweep-ring { opacity: 0.24 !important; }
+  .es-node { opacity: 0.4 !important; }
+}

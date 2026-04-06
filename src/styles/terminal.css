@@ -1,0 +1,64 @@
+/* ── xterm ── */
+.terminal-container {
+  width: 100%;
+  height: 100%;
+  padding: 2px 4px 4px;
+}
+
+.terminal-container .xterm {
+  height: 100%;
+}
+
+/* ── Terminal error overlay ── */
+.terminal-error-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1; /* above xterm canvas layers */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  /* light blur — intentionally shows terminal state beneath */
+  background: color-mix(in oklch, var(--term-bg, var(--card)) 85%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.terminal-pending-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--term-bg, var(--card)) 92%, transparent), color-mix(in oklch, var(--term-titlebar, var(--card)) 84%, transparent));
+  pointer-events: none;
+}
+
+.terminal-error-text {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.terminal-reopen-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: calc(var(--radius) * 0.8);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.terminal-reopen-btn:hover {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.terminal-reopen-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}

@@ -1,0 +1,10 @@
+{
+  "identifier": "default",
+  "description": "Korum default capabilities",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "clipboard-manager:default"
+  ]
+}
