@@ -1,13 +1,10 @@
 import { memo, useEffect, useRef, useCallback, useMemo, useState } from "react";
-import { invoke, Channel } from "@tauri-apps/api/core";
-import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { SerializeAddon } from "@xterm/addon-serialize";
 import "@xterm/xterm/css/xterm.css";
 import { useSettings } from "@/lib/settings-context";
-import { TERMINAL_FONT_FAMILIES, TERMINAL_FONT_LOAD_TARGETS, getXtermTheme } from "@/lib/settings";
-import { handleTerminalShortcut } from "@/lib/terminal-shortcuts";
+import { getXtermTheme } from "@/lib/settings";
+import { useXtermSession } from "@/lib/xterm-session";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
 import {
@@ -16,7 +13,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import type { TerminalWindow as TerminalWindowState, WindowUpdatable, ResizeEdge } from "@/types";
+import type { TerminalWindow as TerminalWindowState, WindowUpdatable, ResizeEdge, PasteRequest } from "@/types";
 
 // Lighten/darken a hex color
 function adjustBrightness(hex: string, amount: number): string {
@@ -42,13 +39,7 @@ function getChromeShades(background: string): { titlebar: string; border: string
   };
 }
 
-const SNAPSHOT_SCROLLBACK_ROWS = 120;
-
-function writeTerminalSnapshot(term: Terminal, snapshot: string): Promise<void> {
-  return new Promise((resolve) => {
-    term.write(snapshot, () => resolve());
-  });
-}
+const RESIZE_EDGES = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
 
 interface Props {
   id: string;
@@ -67,6 +58,7 @@ interface Props {
   onUpdate: (id: string, updates: Partial<WindowUpdatable>) => void;
   onFocus: (id: string) => void;
   onRename: (id: string, title: string) => void;
+  onPasteRequest: (request: PasteRequest) => void;
 }
 
 export default memo(function TerminalWindow({
@@ -86,11 +78,10 @@ export default memo(function TerminalWindow({
   onUpdate,
   onFocus,
   onRename,
+  onPasteRequest,
 }: Props) {
   const { settings } = useSettings();
   const termRef = useRef<HTMLDivElement>(null);
-  const termInstanceRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
   const ptyIdRef = useRef<string | null>(null);
   const pendingDisposeRef = useRef<{ term: Terminal; timer: number } | null>(null);
   const mountedRef = useRef(false);
@@ -100,7 +91,6 @@ export default memo(function TerminalWindow({
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState("");
   const [spawnError, setSpawnError] = useState<string | null>(null);
-  const [isSessionReady, setIsSessionReady] = useState(false);
   const [isPtyReady, setIsPtyReady] = useState(false);
   const [respawnTrigger, setRespawnTrigger] = useState(0);
   const hydrationSettledRef = useRef(false);
@@ -205,144 +195,28 @@ export default memo(function TerminalWindow({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- respawnTrigger forces re-spawn on reopen; cwdRef/onPtySpawned stable via refs
   }, [shouldHydrate, respawnTrigger]);
 
-  // ── Effect B: xterm + attach lifecycle ──
-  // Creates xterm when the PTY is ready AND this terminal has a live-view slot.
-  // Detaches and disposes xterm when the slot is released (PTY continues buffering in Rust).
-  useEffect(() => {
-    const ptyId = ptyIdRef.current;
-    if (!isPtyReady || !shouldAttach || !ptyId || !termRef.current) return;
-
-    flushPendingDispose();
-    termRef.current.replaceChildren();
-
-    const xtermTheme = getXtermTheme(settings.terminalTheme);
-    const term = new Terminal({
-      fontSize: settings.terminalFontSize,
-      fontFamily: TERMINAL_FONT_FAMILIES[settings.terminalFont],
-      lineHeight: 1.22,
-      theme: {
-        ...xtermTheme,
-        cursorAccent: xtermTheme.background,
-        selectionBackground: `${xtermTheme.foreground}30`,
-      },
-      cursorBlink: true,
-      allowProposedApi: true,
-    });
-
-    const fitAddon = new FitAddon();
-    const serializeAddon = new SerializeAddon();
-    term.loadAddon(fitAddon);
-    term.loadAddon(serializeAddon);
-    termInstanceRef.current = term;
-    fitAddonRef.current = fitAddon;
-
-    // Open terminal synchronously (container is in DOM from React commit)
-    term.open(termRef.current!);
-
-    // Fit synchronously BEFORE anything else — ensures correct dimensions
-    try { fitAddon.fit(); } catch { /* container not ready */ }
-
-    let alive = true;
-    let attached = false;
-    let hasLiveData = false;
-    // Capture snapshot at mount time — never read reactively (avoids Effect B rerun on prop change)
-    const snapshotAtMount = terminalSnapshot;
-    const channel = new Channel<number[]>();
-    channel.onmessage = (data: number[]) => {
-      if (!alive) return;
-      hasLiveData = true;
-      term.write(new Uint8Array(data));
-    };
-    const onDataDisposable = term.onData((data: string) => {
-      if (ptyIdRef.current) {
-        invoke("write_terminal", { id: ptyIdRef.current, data }).catch(() => {
-          if (alive) setSpawnError("Terminal process is not responding");
-        });
-      }
-    });
-
-    void (async () => {
-      // Restore visual state from previous detach (if any)
-      if (snapshotAtMount) {
-        await writeTerminalSnapshot(term, snapshotAtMount);
-      }
-
-      if (!alive) return;
-
-      // Attach first — ring buffer replays at current dimensions
-      await invoke("attach_terminal", { id: ptyId, outputChannel: channel });
-      if (!alive) return;
-
-      attached = true;
-      setIsSessionReady(true);
-
-      // Resize AFTER attach — shell redraws go directly to xterm (not buffered)
-      const dims = fitAddon.proposeDimensions();
-      if (dims) {
-        invoke("resize_terminal", { id: ptyId, rows: dims.rows, cols: dims.cols }).catch(() => {});
-      }
-    })().catch((err) => {
-      if (alive) setSpawnError(String(err));
-    });
-
-    // Keyboard shortcuts — Cmd+C (copy), Cmd+V (paste), Cmd+K (clear), Shift+Enter (line feed)
-    term.attachCustomKeyEventHandler((ev) => {
-      return handleTerminalShortcut(ev, {
-        selection: term.getSelection(),
-        isMounted: mountedRef.current,
-        copySelection: (selection) => {
-          writeText(selection).catch(() => {});
-        },
-        pasteClipboard: () => {
-          const currentId = ptyIdRef.current;
-          readText().then((text) => {
-            if (!text || !currentId || !mountedRef.current) return;
-            const data = term.modes.bracketedPasteMode
-              ? `\x1b[200~${text}\x1b[201~`
-              : text;
-            invoke("write_terminal", { id: currentId, data });
-          }).catch(() => {});
-        },
-        clearTerminal: () => {
-          term.clear();
-          if (ptyIdRef.current) invoke("write_terminal", { id: ptyIdRef.current, data: "\x0c" });
-        },
-        sendLineFeed: () => {
-          if (ptyIdRef.current) invoke("write_terminal", { id: ptyIdRef.current, data: "\n" });
-        },
-      });
-    });
-
-    return () => {
-      alive = false;
-      if (attached) {
-        // Only update snapshot if live PTY data arrived — prevents gradual
-        // history compression when cycling through attach/detach without new output.
-        if (hasLiveData) {
-          const snapshot = serializeAddon.serialize({
-            scrollback: SNAPSHOT_SCROLLBACK_ROWS,
-          });
-          onSnapshotCaptured(id, snapshot || null);
-        }
-        invoke("detach_terminal", { id: ptyId }).catch(() => {});
-      }
-      onDataDisposable.dispose();
-      termInstanceRef.current = null;
-      fitAddonRef.current = null;
-      setIsSessionReady(false);
-      // Defer dispose one tick to stay compatible with xterm internals, but
-      // guard it so a rapid re-attach cannot tear down the fresh session.
-      const timer = window.setTimeout(() => {
-        if (pendingDisposeRef.current?.term !== term) return;
-        term.dispose();
-        if (pendingDisposeRef.current?.term === term) {
-          pendingDisposeRef.current = null;
-        }
-      }, 0);
-      pendingDisposeRef.current = { term, timer };
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- settings handled by separate effect; terminalSnapshot captured at mount via snapshotAtMount
-  }, [flushPendingDispose, id, isPtyReady, onSnapshotCaptured, shouldAttach]);
+  // ── xterm session (Effect B + settings/focus/resize effects) ──
+  const { termInstanceRef, fitAddonRef, isSessionReady } = useXtermSession({
+    id,
+    isPtyReady,
+    shouldAttach,
+    terminalSnapshot,
+    terminalFont: settings.terminalFont,
+    terminalFontSize: settings.terminalFontSize,
+    terminalTheme: settings.terminalTheme,
+    zoomRef,
+    ptyIdRef,
+    mountedRef,
+    termRef,
+    pendingDisposeRef,
+    windowWidth: win.width,
+    windowHeight: win.height,
+    isActive,
+    flushPendingDispose,
+    onSnapshotCaptured,
+    onPasteRequest,
+    onSpawnError: setSpawnError,
+  });
 
   // Reopen after error — kill old PTY, trigger respawn via Effect A
   const handleReopen = useCallback(() => {
@@ -358,78 +232,6 @@ export default memo(function TerminalWindow({
     setSpawnError(null);
     setRespawnTrigger((prev) => prev + 1);
   }, [id, onPtySpawned, onSnapshotCaptured]);
-
-  // Update terminal options when settings change — debounce expensive refit
-  useEffect(() => {
-    const term = termInstanceRef.current;
-    if (!term) return;
-    const fontFamily = TERMINAL_FONT_FAMILIES[settings.terminalFont];
-    const fontLoadTarget = TERMINAL_FONT_LOAD_TARGETS[settings.terminalFont];
-    term.options.fontFamily = fontFamily;
-    term.options.fontSize = settings.terminalFontSize;
-    const xtermTheme = getXtermTheme(settings.terminalTheme);
-    term.options.theme = {
-      ...xtermTheme,
-      cursorAccent: xtermTheme.background,
-      selectionBackground: `${xtermTheme.foreground}30`,
-    };
-
-    let cancelled = false;
-    const fitTerminal = () => {
-      if (cancelled || !mountedRef.current) return;
-
-      // Force xterm to re-measure font metrics
-      term.clearTextureAtlas();
-      const fit = fitAddonRef.current;
-      if (fit) {
-        try {
-          fit.fit();
-          const dims = fit.proposeDimensions();
-          if (dims && ptyIdRef.current) invoke("resize_terminal", { id: ptyIdRef.current, rows: dims.rows, cols: dims.cols });
-        } catch { /* ignore */ }
-      }
-    };
-
-    const timer = window.setTimeout(() => {
-      requestAnimationFrame(fitTerminal);
-    }, 120);
-
-    if (fontLoadTarget && "fonts" in document) {
-      void Promise.all([
-        document.fonts.load(`${settings.terminalFontSize}px ${fontLoadTarget}`, "MW@#"),
-        document.fonts.ready,
-      ]).then(() => {
-        window.clearTimeout(timer);
-        requestAnimationFrame(fitTerminal);
-      }).catch(() => {
-        window.clearTimeout(timer);
-        requestAnimationFrame(fitTerminal);
-      });
-    }
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [settings.terminalFont, settings.terminalFontSize, settings.terminalTheme]);
-
-  // Focus terminal when it becomes the active window
-  useEffect(() => {
-    if (isActive) termInstanceRef.current?.focus();
-  }, [isActive]);
-
-  // Re-fit when resized
-  useEffect(() => {
-    const fit = fitAddonRef.current;
-    if (!fit) return;
-    requestAnimationFrame(() => {
-      try {
-        fit.fit();
-        const dims = fit.proposeDimensions();
-        if (dims && ptyIdRef.current) invoke("resize_terminal", { id: ptyIdRef.current, rows: dims.rows, cols: dims.cols });
-      } catch { /* ignore */ }
-    });
-  }, [win.width, win.height]);
 
   const handleTitleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -512,7 +314,7 @@ export default memo(function TerminalWindow({
       document.addEventListener("mousemove", handleMove);
       document.addEventListener("mouseup", handleUp);
     },
-    [id, win.x, win.y, win.width, win.height, zoomRef, onUpdate, onFocus],
+    [id, win.x, win.y, win.width, win.height, zoomRef, onUpdate, onFocus, fitAddonRef],
   );
 
   const startRename = useCallback(() => {
@@ -602,7 +404,7 @@ export default memo(function TerminalWindow({
             )}
           </div>
 
-          {(["n","s","e","w","ne","nw","se","sw"] as const).map((edge) => (
+          {RESIZE_EDGES.map((edge) => (
             <div key={edge} className="resize-edge" data-edge={edge} onMouseDown={(e) => handleEdgeResize(e, edge)} />
           ))}
         </div>

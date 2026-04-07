@@ -46,6 +46,14 @@ export interface Workspace {
   rootPath?: string;
 }
 
+/** Request to paste clipboard text into a terminal (may trigger confirmation dialog). */
+export interface PasteRequest {
+  text: string;
+  terminalId: string;
+  ptyId: string;
+  bracketedPasteMode: boolean;
+}
+
 export const WORKSPACE_COLORS: Record<WorkspaceColor, string> = {
   green: "#2dcf67",
   blue: "#58a6ff",

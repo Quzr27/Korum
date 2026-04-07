@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SettingsProvider } from "@/lib/settings-context";
+import { VisibilityProvider } from "@/lib/visibility-context";
 import { applySettings, loadBootstrapSettings } from "@/lib/settings";
 import App from "./App";
 import "./styles/app.css";
@@ -13,9 +14,11 @@ applySettings(loadBootstrapSettings());
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <SettingsProvider>
-      <TooltipProvider delayDuration={300}>
-        <App />
-      </TooltipProvider>
+      <VisibilityProvider>
+        <TooltipProvider delayDuration={300}>
+          <App />
+        </TooltipProvider>
+      </VisibilityProvider>
     </SettingsProvider>
   </React.StrictMode>,
 );

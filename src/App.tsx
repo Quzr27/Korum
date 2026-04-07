@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import Sidebar, { CreateWorkspaceDialog } from "@/components/layout/Sidebar";
 import SettingsPanel from "@/components/layout/SettingsPanel";
 import QuitGuardDialog from "@/components/layout/QuitGuardDialog";
+import PasteConfirmDialog from "@/components/layout/PasteConfirmDialog";
 import ShortcutsOverlay from "@/components/layout/ShortcutsOverlay";
 import ZoomSpeedControl from "@/components/layout/ZoomSpeedControl";
 import Canvas from "@/components/canvas/Canvas";
@@ -19,7 +20,7 @@ import {
 import { isWindowInViewport } from "@/lib/viewport";
 import { confirmAppQuit, QUIT_REQUESTED_EVENT } from "@/lib/quit-guard";
 import type { PersistedState, ViewportState } from "@/lib/persistence";
-import type { WindowState, Workspace, WindowKind, WindowUpdatable, Point2D } from "@/types";
+import type { WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest } from "@/types";
 
 interface AppSnapshot {
   workspaces: Workspace[];
@@ -52,6 +53,7 @@ export default function App() {
   const [isQuitting, setIsQuitting] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [settingsDismissVersion, setSettingsDismissVersion] = useState(0);
+  const [pasteConfirmState, setPasteConfirmState] = useState<PasteRequest | null>(null);
   const hasWorkspaces = workspaces.length > 0;
 
   // ── Viewport (per-workspace, lifted from Canvas) ──
@@ -390,6 +392,33 @@ export default function App() {
     }
   }, []);
 
+  // ── Paste confirmation ──
+  const handlePasteRequest = useCallback((request: PasteRequest) => {
+    const isMultiLine = request.text.includes("\n");
+    if (isMultiLine) {
+      setPasteConfirmState(request);
+    } else {
+      const data = request.bracketedPasteMode
+        ? `\x1b[200~${request.text}\x1b[201~`
+        : request.text;
+      invoke("write_terminal", { id: request.ptyId, data }).catch(() => {});
+    }
+  }, []);
+
+  const handlePasteConfirm = useCallback(() => {
+    const req = pasteConfirmState;
+    if (!req) return;
+    const data = req.bracketedPasteMode
+      ? `\x1b[200~${req.text}\x1b[201~`
+      : req.text;
+    invoke("write_terminal", { id: req.ptyId, data }).catch(() => {});
+    setPasteConfirmState(null);
+  }, [pasteConfirmState]);
+
+  const handlePasteCancel = useCallback(() => {
+    setPasteConfirmState(null);
+  }, []);
+
   const removeWindow = useCallback((id: string) => {
     // Kill PTY before removing from state
     const win = stateRef.current.windows.find((w) => w.id === id);
@@ -397,6 +426,8 @@ export default function App() {
       invoke("kill_terminal", { id: win.ptyId }).catch(() => {});
     }
     delete terminalSnapshotsRef.current[id];
+    // Dismiss paste dialog if it belongs to the terminal being closed
+    setPasteConfirmState((prev) => (prev?.terminalId === id ? null : prev));
     setWindows((prev) => {
       const remaining = prev.filter((w) => w.id !== id);
       setActiveWindowId((cur) =>
@@ -599,7 +630,7 @@ export default function App() {
 
   // ── Global keyboard shortcuts ──
   const modalOpenRef = useRef(false);
-  modalOpenRef.current = quitDialogOpen || shortcutsOpen || createDialogOpen;
+  modalOpenRef.current = quitDialogOpen || shortcutsOpen || createDialogOpen || pasteConfirmState !== null;
   const shortcutsOpenRef = useRef(false);
   shortcutsOpenRef.current = shortcutsOpen;
   useEffect(() => {
@@ -700,6 +731,7 @@ export default function App() {
         onAddNote={() => addWindow("note")}
         onArrangeWindows={arrangeWindows}
         onCreateWorkspace={() => setCreateDialogOpen(true)}
+        onPasteRequest={handlePasteRequest}
       />
 
       {hasWorkspaces ? (
@@ -728,6 +760,13 @@ export default function App() {
         open={createDialogOpen}
         onOpenChange={setCreateDialogOpen}
         onCreateWorkspace={addWorkspace}
+      />
+
+      <PasteConfirmDialog
+        open={pasteConfirmState !== null}
+        text={pasteConfirmState?.text ?? ""}
+        onCancel={handlePasteCancel}
+        onConfirm={handlePasteConfirm}
       />
 
       <QuitGuardDialog
