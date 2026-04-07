@@ -35,6 +35,6 @@ export async function persistSettings(settings: unknown): Promise<void> {
   await invoke("save_settings", { settings });
 }
 
-export async function loadPersistedSettings(): Promise<unknown | null> {
-  return await invoke<unknown | null>("load_settings");
+export async function loadPersistedSettings(): Promise<unknown> {
+  return await invoke<unknown>("load_settings");
 }

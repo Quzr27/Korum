@@ -29,12 +29,12 @@ const DEFAULT_WINDOW_DEFAULTS: WindowDefaults = {
   height: 348,
 };
 
-const VALID_COLORS = new Set<string>(Object.keys(WORKSPACE_COLORS));
-const VALID_ICONS = new Set<string>([
+const VALID_COLORS: ReadonlySet<string> = new Set<string>(Object.keys(WORKSPACE_COLORS));
+const VALID_ICONS: ReadonlySet<string> = new Set<string>([
   "code", "terminal", "rocket", "star", "globe", "home", "folder", "fire",
   "diamond", "bug", "coffee", "crown", "git", "api", "database", "server",
   "cpu", "cloud", "shield", "package", "layers", "dashboard", "target", "wrench",
-]);
+] satisfies WorkspaceIconKey[]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

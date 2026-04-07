@@ -8,7 +8,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import type { NoteWindow as NoteWindowState, WindowUpdatable } from "@/types";
+import type { NoteWindow as NoteWindowState, WindowUpdatable, ResizeEdge } from "@/types";
 
 interface Props {
   id: string;
@@ -101,7 +101,7 @@ export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, ws
   );
 
   const handleEdgeResize = useCallback(
-    (e: React.MouseEvent, edge: string) => {
+    (e: React.MouseEvent, edge: ResizeEdge) => {
       e.preventDefault();
       e.stopPropagation();
       onFocus(id);

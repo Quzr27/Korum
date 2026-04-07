@@ -16,7 +16,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import type { TerminalWindow as TerminalWindowState, WindowUpdatable } from "@/types";
+import type { TerminalWindow as TerminalWindowState, WindowUpdatable, ResizeEdge } from "@/types";
 
 // Lighten/darken a hex color
 function adjustBrightness(hex: string, amount: number): string {
@@ -459,7 +459,7 @@ export default memo(function TerminalWindow({
   );
 
   const handleEdgeResize = useCallback(
-    (e: React.MouseEvent, edge: string) => {
+    (e: React.MouseEvent, edge: ResizeEdge) => {
       e.preventDefault();
       e.stopPropagation();
       onFocus(id);

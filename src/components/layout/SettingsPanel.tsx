@@ -6,7 +6,6 @@ import {
   type BaseColor,
   type CanvasAtmosphere,
   type RadiusPreset,
-  type TerminalFont,
   type TerminalTheme,
   BASE_COLOR_LABELS,
   BASE_COLOR_SWATCHES,
@@ -26,7 +25,15 @@ import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
-const BASE_COLORS = Object.keys(BASE_COLOR_LABELS) as BaseColor[];
+const BASE_COLORS: readonly BaseColor[] = Object.keys(BASE_COLOR_LABELS) as BaseColor[];
+
+function isBaseColor(value: string): value is BaseColor {
+  return (BASE_COLORS as readonly string[]).includes(value);
+}
+
+function isRadiusPreset(value: number): value is RadiusPreset {
+  return (RADIUS_PRESETS as readonly number[]).includes(value);
+}
 
 interface SettingsPanelProps {
   dismissVersion?: number;
@@ -128,8 +135,8 @@ export default function SettingsPanel({ dismissVersion = 0 }: SettingsPanelProps
                 type="single"
                 value={settings.baseColor}
                 onValueChange={(value) => {
-                  if (BASE_COLORS.includes(value as BaseColor)) {
-                    update({ baseColor: value as BaseColor });
+                  if (isBaseColor(value)) {
+                    update({ baseColor: value });
                   }
                 }}
                 spacing={2}
@@ -182,8 +189,8 @@ export default function SettingsPanel({ dismissVersion = 0 }: SettingsPanelProps
                 value={String(settings.radius)}
                 onValueChange={(value) => {
                   const parsed = Number(value);
-                  if (RADIUS_PRESETS.includes(parsed as RadiusPreset)) {
-                    update({ radius: parsed as RadiusPreset });
+                  if (isRadiusPreset(parsed)) {
+                    update({ radius: parsed });
                   }
                 }}
                 variant="outline"
@@ -241,7 +248,7 @@ export default function SettingsPanel({ dismissVersion = 0 }: SettingsPanelProps
                     variant={settings.terminalFont === font ? "secondary" : "ghost"}
                     className="justify-start"
                     style={{ fontFamily: TERMINAL_FONT_FAMILIES[font] }}
-                    onClick={() => update({ terminalFont: font as TerminalFont })}
+                    onClick={() => update({ terminalFont: font })}
                   >
                     {font}
                   </Button>
