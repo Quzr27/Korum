@@ -13,7 +13,7 @@ import {
 import { useSettings } from "@/lib/settings-context";
 import { selectLiveTerminalIds } from "@/lib/live-terminals";
 import { isWindowInViewport } from "@/lib/viewport";
-import type { WindowState, WindowUpdatable, Workspace, Point2D } from "@/types";
+import type { WindowState, WindowUpdatable, Workspace, Point2D, PasteRequest } from "@/types";
 import { WORKSPACE_COLORS } from "@/types";
 
 const MINIMAP_W = 160;
@@ -45,6 +45,7 @@ interface CanvasProps {
   onAddNote: () => void;
   onArrangeWindows: () => void;
   onCreateWorkspace: () => void;
+  onPasteRequest: (request: PasteRequest) => void;
 }
 
 export default function Canvas({
@@ -72,6 +73,7 @@ export default function Canvas({
   onAddNote,
   onArrangeWindows,
   onCreateWorkspace,
+  onPasteRequest,
 }: CanvasProps) {
   const { settings } = useSettings();
   const [isPanning, setIsPanning] = useState(false);
@@ -342,6 +344,7 @@ export default function Canvas({
                 onUpdate={onUpdate}
                 onFocus={onFocus}
                 onRename={onRename}
+                onPasteRequest={onPasteRequest}
               />
             ) : (
               <NoteWindow
