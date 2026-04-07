@@ -30,7 +30,7 @@ export const DEFAULT_SETTINGS: Settings = {
   zoomSpeed: 1,
 };
 
-export const ZOOM_SPEED_OPTIONS: ZoomSpeed[] = [0.5, 1, 1.5, 2, 3];
+export const ZOOM_SPEED_OPTIONS: readonly ZoomSpeed[] = [0.5, 1, 1.5, 2, 3];
 
 export const BASE_COLOR_LABELS: Record<BaseColor, string> = {
   neutral: "Neutral", zinc: "Slate", stone: "Amber", mauve: "Violet", olive: "Emerald",
@@ -52,10 +52,10 @@ export const CANVAS_ATMOSPHERE_LABELS: Record<CanvasAtmosphere, string> = {
   nocturne: "Nocturne",
 };
 
-export const CANVAS_ATMOSPHERES: CanvasAtmosphere[] = Object.keys(
+export const CANVAS_ATMOSPHERES: readonly CanvasAtmosphere[] = Object.keys(
   CANVAS_ATMOSPHERE_LABELS,
 ) as CanvasAtmosphere[];
 
-export const RADIUS_PRESETS: RadiusPreset[] = [0, 0.3, 0.5, 0.625, 0.75, 1];
+export const RADIUS_PRESETS: readonly RadiusPreset[] = [0, 0.3, 0.5, 0.625, 0.75, 1];
 
 export type CssVarMap = Record<string, string>;

@@ -85,8 +85,8 @@ const WORKSPACE_ICONS: Record<WorkspaceIconKey, IconSvgElement> = {
   dashboard: DashboardBrowsingIcon, target: Target01Icon, wrench: Wrench01Icon,
 };
 
-const ICON_KEYS = Object.keys(WORKSPACE_ICONS) as WorkspaceIconKey[];
-const COLOR_KEYS = Object.keys(WORKSPACE_COLORS) as WorkspaceColor[];
+const ICON_KEYS: readonly WorkspaceIconKey[] = Object.keys(WORKSPACE_ICONS) as WorkspaceIconKey[];
+const COLOR_KEYS: readonly WorkspaceColor[] = Object.keys(WORKSPACE_COLORS) as WorkspaceColor[];
 
 // ── Workspace form (edit mode — no folder picker) ──
 

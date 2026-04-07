@@ -32,6 +32,9 @@ export type WindowState = TerminalWindow | NoteWindow;
 /** Fields safe to mutate via drag/resize. */
 export type WindowUpdatable = Pick<BaseWindow, "x" | "y" | "width" | "height">;
 
+/** Resize handle edge/corner directions. */
+export type ResizeEdge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+
 export type WorkspaceColor = "green" | "blue" | "orange" | "red" | "purple" | "yellow" | "pink" | "cyan";
 export type WorkspaceIconKey = "code" | "terminal" | "rocket" | "star" | "globe" | "home" | "folder" | "fire" | "diamond" | "bug" | "coffee" | "crown" | "git" | "api" | "database" | "server" | "cpu" | "cloud" | "shield" | "package" | "layers" | "dashboard" | "target" | "wrench";
 

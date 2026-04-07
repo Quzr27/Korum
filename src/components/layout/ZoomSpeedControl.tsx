@@ -1,5 +1,5 @@
 import { useSettings } from "@/lib/settings-context";
-import { ZOOM_SPEED_OPTIONS, type ZoomSpeed } from "@/lib/settings";
+import { ZOOM_SPEED_OPTIONS } from "@/lib/settings";
 import {
   Popover,
   PopoverContent,
@@ -37,7 +37,7 @@ export default function ZoomSpeedControl() {
                     ? "bg-foreground/10 text-foreground"
                     : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
                 )}
-                onClick={() => update({ zoomSpeed: s as ZoomSpeed })}
+                onClick={() => update({ zoomSpeed: s })}
               >
                 {s}x
               </button>

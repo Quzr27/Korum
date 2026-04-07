@@ -3,7 +3,7 @@
 import type { TerminalFont, TerminalTheme } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
 
-export const TERMINAL_FONTS: TerminalFont[] = ["JetBrains Mono", "IBM Plex Mono", "Source Code Pro"];
+export const TERMINAL_FONTS: readonly TerminalFont[] = ["JetBrains Mono", "IBM Plex Mono", "Source Code Pro"];
 
 export const TERMINAL_FONT_FAMILIES: Record<TerminalFont, string> = {
   "JetBrains Mono": "'JetBrains Mono', 'IBM Plex Mono', Menlo, Monaco, 'Courier New', monospace",
@@ -26,11 +26,13 @@ const LEGACY_TERMINAL_FONT_MIGRATIONS: Record<string, TerminalFont> = {
   "Inconsolata": "Source Code Pro",
 };
 
+function isTerminalFont(value: string): value is TerminalFont {
+  return (TERMINAL_FONTS as readonly string[]).includes(value);
+}
+
 export function normalizeTerminalFont(value: unknown): TerminalFont {
   if (typeof value === "string") {
-    if ((TERMINAL_FONTS as readonly string[]).includes(value)) {
-      return value as TerminalFont;
-    }
+    if (isTerminalFont(value)) return value;
     const migrated = LEGACY_TERMINAL_FONT_MIGRATIONS[value];
     if (migrated) return migrated;
   }
@@ -65,7 +67,7 @@ export const TERMINAL_THEME_LABELS: Record<TerminalTheme, string> = {
   "one-half-light": "One Half Light",
 };
 
-export const TERMINAL_THEMES: TerminalTheme[] = Object.keys(TERMINAL_THEME_LABELS) as TerminalTheme[];
+export const TERMINAL_THEMES: readonly TerminalTheme[] = Object.keys(TERMINAL_THEME_LABELS) as TerminalTheme[];
 
 export const LEGACY_TERMINAL_THEME_MIGRATIONS: Record<string, TerminalTheme> = {
   "default": "oceanic-next",
@@ -85,11 +87,13 @@ export const LEGACY_TERMINAL_THEME_MIGRATIONS: Record<string, TerminalTheme> = {
   "one-light": "one-half-light",
 };
 
+function isTerminalTheme(value: string): value is TerminalTheme {
+  return (TERMINAL_THEMES as readonly string[]).includes(value);
+}
+
 export function normalizeTerminalTheme(value: unknown): TerminalTheme {
   if (typeof value === "string") {
-    if ((TERMINAL_THEMES as readonly string[]).includes(value)) {
-      return value as TerminalTheme;
-    }
+    if (isTerminalTheme(value)) return value;
     const migrated = LEGACY_TERMINAL_THEME_MIGRATIONS[value];
     if (migrated) return migrated;
   }
