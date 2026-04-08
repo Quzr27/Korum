@@ -9,7 +9,7 @@ Drag, resize, zoom — organize your workflow spatially instead of switching bet
 
 ![Korum with settings panel](screenshot-2.png)
 
-> **v0.1.0-alpha** — early release. macOS only for now.
+> **v0.1.1-alpha** — early release. macOS only for now.
 
 ## Status
 
@@ -23,6 +23,8 @@ Korum is currently in early alpha. Right now, the focus is stability, persistenc
 - Session persistence (positions, sizes, and content survive restarts)
 - Built for scale — viewport-aware rendering ensures only visible terminals consume resources
 - 25 terminal themes, 5 canvas atmospheres, customizable fonts, font sizes, and zoom speed
+- Claude Code & OpenAI Codex usage limits tracking (live OAuth polling)
+- Paste protection — confirmation dialog for large pastes into terminal
 
 ## Install
 

@@ -4,6 +4,25 @@ All notable changes to Korum will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.1-alpha] - 2026-04-08
+
+### Added
+- **Usage limits card** — live Claude Code & OpenAI Codex usage tracking via OAuth APIs (5-min polling, localStorage cache, 429 backoff)
+- **Paste protection dialog** — confirmation prompt before pasting large content into terminal
+
+### Changed
+- Extracted `useXtermSession` hook from TerminalWindow (cleaner terminal lifecycle)
+- Added `VisibilityProvider` for single-listener broadcast on focus/unlock
+- CSS scale compensation for xterm mouse events extracted to `xterm-mouse-compat.ts`
+
+### Fixed
+- Strengthened TypeScript type safety across frontend (eliminated loose types, stricter generics)
+
+### Internal
+- Added unit tests for paste dialog, visibility context, and xterm mouse compat
+- Added `card` and `progress` shadcn components
+- New Rust modules: `claude_usage.rs`, `codex_usage.rs` (OAuth token refresh, Keychain fallback)
+
 ## [0.1.0-alpha] - 2026-04-04
 
 > Initial public alpha of Korum — a spatial terminal workspace for developers. Feedback welcome.
