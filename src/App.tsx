@@ -8,6 +8,7 @@ import QuitGuardDialog from "@/components/layout/QuitGuardDialog";
 import PasteConfirmDialog from "@/components/layout/PasteConfirmDialog";
 import ShortcutsOverlay from "@/components/layout/ShortcutsOverlay";
 import ZoomSpeedControl from "@/components/layout/ZoomSpeedControl";
+import UsageLimitsCard from "@/components/layout/UsageLimitsCard";
 import Canvas from "@/components/canvas/Canvas";
 import EmptyCanvasState from "@/components/canvas/EmptyCanvasState";
 import { persistState, loadPersistedState } from "@/lib/persistence";
@@ -781,13 +782,20 @@ export default function App() {
         onOpenChange={setShortcutsOpen}
       />
 
+      {hasWorkspaces ? <UsageLimitsCard /> : null}
+
       {hasWorkspaces ? (
         <div className="fixed bottom-3 right-3 z-40 grid w-40 grid-cols-3 gap-1">
           <ZoomSpeedControl />
           <SettingsPanel dismissVersion={settingsDismissVersion} />
-          <div className="glass-subtle flex h-8 items-center justify-center rounded-lg text-[11px] font-medium tabular-nums text-muted-foreground select-none">
+          <button
+            type="button"
+            className="glass-subtle flex h-8 cursor-pointer items-center justify-center rounded-lg text-[11px] font-medium tabular-nums text-muted-foreground transition-colors select-none hover:text-foreground"
+            onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
+            aria-label="Reset viewport"
+          >
             {Math.round(zoom * 100)}%
-          </div>
+          </button>
         </div>
       ) : null}
     </div>

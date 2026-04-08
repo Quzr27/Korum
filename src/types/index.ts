@@ -54,6 +54,26 @@ export interface PasteRequest {
   bracketedPasteMode: boolean;
 }
 
+export interface UsageBucket {
+  utilization: number;
+  resets_at: string;
+}
+
+export interface ClaudeUsageResponse {
+  five_hour: UsageBucket | null;
+  seven_day: UsageBucket | null;
+  seven_day_opus: UsageBucket | null;
+  seven_day_sonnet: UsageBucket | null;
+  subscription_type: string | null;
+  rate_limit_tier: string | null;
+}
+
+export interface CodexUsageResponse {
+  primary_window: UsageBucket | null;
+  secondary_window: UsageBucket | null;
+  plan_type: string | null;
+}
+
 export const WORKSPACE_COLORS: Record<WorkspaceColor, string> = {
   green: "#2dcf67",
   blue: "#58a6ff",

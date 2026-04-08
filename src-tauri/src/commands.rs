@@ -73,6 +73,18 @@ fn get_default_shell() -> String {
     "/bin/sh".to_string()
 }
 
+// ── Claude usage ──
+
+#[tauri::command]
+pub async fn fetch_claude_usage() -> Result<crate::claude_usage::UsageResponse, String> {
+    crate::claude_usage::fetch_usage().await
+}
+
+#[tauri::command]
+pub async fn fetch_codex_usage() -> Result<crate::codex_usage::CodexUsageResponse, String> {
+    crate::codex_usage::fetch_usage().await
+}
+
 // ── Storage commands ──
 
 #[tauri::command]
