@@ -40,6 +40,8 @@ export function validateSettings(raw: unknown): Settings {
         : DEFAULT_SETTINGS.canvasAtmosphere,
     zoomSpeed: (ZOOM_SPEED_OPTIONS as readonly number[]).includes(p.zoomSpeed as number)
       ? p.zoomSpeed as ZoomSpeed : DEFAULT_SETTINGS.zoomSpeed,
+    showUsageLimits: typeof p.showUsageLimits === "boolean"
+      ? p.showUsageLimits : DEFAULT_SETTINGS.showUsageLimits,
   };
 }
 
@@ -68,6 +70,8 @@ export function parseSettings(raw: unknown): { settings: Settings; isFullyValid:
     (typeof p.canvasAtmosphere === "string" &&
     (CANVAS_ATMOSPHERES as readonly string[]).includes(p.canvasAtmosphere));
   const isZoomSpeedValid = (ZOOM_SPEED_OPTIONS as readonly number[]).includes(p.zoomSpeed as number);
+  // showUsageLimits: treat missing field as valid (new field, existing settings files won't have it)
+  const isShowUsageLimitsValid = p.showUsageLimits === undefined || typeof p.showUsageLimits === "boolean";
 
   return {
     settings,
@@ -79,7 +83,8 @@ export function parseSettings(raw: unknown): { settings: Settings; isFullyValid:
       isTerminalFontSizeValid &&
       isTerminalThemeValid &&
       isCanvasAtmosphereValid &&
-      isZoomSpeedValid,
+      isZoomSpeedValid &&
+      isShowUsageLimitsValid,
   };
 }
 

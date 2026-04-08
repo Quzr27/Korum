@@ -17,6 +17,7 @@ export interface Settings {
   terminalTheme: TerminalTheme;
   canvasAtmosphere: CanvasAtmosphere;
   zoomSpeed: ZoomSpeed;
+  showUsageLimits: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -28,6 +29,7 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalTheme: "arcadia-midnight",
   canvasAtmosphere: "studio",
   zoomSpeed: 1,
+  showUsageLimits: true,
 };
 
 export const ZOOM_SPEED_OPTIONS: readonly ZoomSpeed[] = [0.5, 1, 1.5, 2, 3];

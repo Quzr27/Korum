@@ -130,6 +130,29 @@ export default function SettingsPanel({ dismissVersion = 0 }: SettingsPanelProps
 
             <Separator />
 
+            <SettingRow label="Usage Limits">
+              <ToggleGroup
+                type="single"
+                value={settings.showUsageLimits ? "on" : "off"}
+                onValueChange={(value) => {
+                  if (value === "on" || value === "off") {
+                    update({ showUsageLimits: value === "on" });
+                  }
+                }}
+                variant="outline"
+                size="sm"
+              >
+                <ToggleGroupItem value="on" aria-label="Show usage limits">
+                  On
+                </ToggleGroupItem>
+                <ToggleGroupItem value="off" aria-label="Hide usage limits">
+                  Off
+                </ToggleGroupItem>
+              </ToggleGroup>
+            </SettingRow>
+
+            <Separator />
+
             <SettingRow label="Base Color">
               <ToggleGroup
                 type="single"

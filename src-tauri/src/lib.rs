@@ -1,11 +1,14 @@
+mod claude_usage;
+mod codex_usage;
 mod commands;
 mod pty;
 mod quit_guard;
 mod storage;
 
 use commands::{
-    attach_terminal, confirm_app_exit, create_terminal, detach_terminal, kill_terminal,
-    load_settings, load_state, resize_terminal, save_settings, save_state, write_terminal,
+    attach_terminal, confirm_app_exit, create_terminal, detach_terminal, fetch_claude_usage,
+    fetch_codex_usage, kill_terminal, load_settings, load_state, resize_terminal, save_settings,
+    save_state, write_terminal,
 };
 use pty::PtyState;
 use quit_guard::QuitGuardState;
@@ -142,6 +145,8 @@ pub fn run() {
             write_terminal,
             resize_terminal,
             kill_terminal,
+            fetch_claude_usage,
+            fetch_codex_usage,
             save_state,
             load_state,
             save_settings,

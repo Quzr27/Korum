@@ -43,6 +43,7 @@ describe("validateSettings", () => {
       terminalTheme: "dracula",
       canvasAtmosphere: "aurora",
       zoomSpeed: 2,
+      showUsageLimits: true,
     };
     expect(validateSettings(input)).toEqual(input);
   });
@@ -180,6 +181,7 @@ describe("parseSettings", () => {
       terminalTheme: "oceanic-next",
       canvasAtmosphere: "studio",
       zoomSpeed: 1,
+      showUsageLimits: true,
     };
     const { settings, isFullyValid } = parseSettings(input);
     expect(isFullyValid).toBe(true);
@@ -281,6 +283,7 @@ describe("parseSettings", () => {
       terminalTheme: "dracula",
       canvasAtmosphere: "nocturne",
       zoomSpeed: 1.5,
+      showUsageLimits: true,
     };
     const json = JSON.stringify(input);
     const parsed = JSON.parse(json);
