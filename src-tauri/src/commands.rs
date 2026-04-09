@@ -1,3 +1,4 @@
+use crate::file_tree::FileWatcherState;
 use crate::pty::PtyState;
 use crate::quit_guard::QuitGuardState;
 use serde::Serialize;
@@ -115,4 +116,58 @@ pub fn confirm_app_exit(
     quit_guard.allow_next_exit();
     app.exit(0);
     Ok(())
+}
+
+// ── File tree commands ──
+
+#[tauri::command]
+pub fn read_directory(path: String) -> Result<Vec<crate::file_tree::FileEntry>, String> {
+    crate::file_tree::read_directory(&path)
+}
+
+#[tauri::command]
+pub fn get_git_status(root_path: String) -> Result<crate::file_tree::GitStatusResult, String> {
+    crate::file_tree::get_git_status(&root_path)
+}
+
+#[tauri::command]
+pub fn read_file_content(path: String) -> Result<String, String> {
+    crate::file_tree::read_file_content(&path)
+}
+
+#[tauri::command]
+pub fn create_file(path: String, root: String) -> Result<(), String> {
+    crate::file_tree::create_file(&path, &root)
+}
+
+#[tauri::command]
+pub fn create_directory(path: String, root: String) -> Result<(), String> {
+    crate::file_tree::create_directory(&path, &root)
+}
+
+#[tauri::command]
+pub fn rename_path(old_path: String, new_path: String, root: String) -> Result<(), String> {
+    crate::file_tree::rename_path(&old_path, &new_path, &root)
+}
+
+#[tauri::command]
+pub fn delete_path(path: String, root: String) -> Result<(), String> {
+    crate::file_tree::delete_path(&path, &root)
+}
+
+#[tauri::command]
+pub fn start_watching(
+    app: tauri::AppHandle,
+    state: State<'_, FileWatcherState>,
+    root_path: String,
+) -> Result<(), String> {
+    crate::file_tree::start_watching(&root_path, &app, &state)
+}
+
+#[tauri::command]
+pub fn stop_watching(
+    state: State<'_, FileWatcherState>,
+    root_path: String,
+) -> Result<(), String> {
+    crate::file_tree::stop_watching(&root_path, &state)
 }

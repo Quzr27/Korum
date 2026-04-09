@@ -373,6 +373,37 @@ export default function App() {
     saveAfterUpdate(); // immediate — structural change
   }, [saveAfterUpdate]);
 
+  /** Opens a file from the file tree as a NoteWindow with pre-filled content. */
+  const openFile = useCallback(async (filePath: string, workspaceId: string) => {
+    try {
+      const content = await invoke<string>("read_file_content", { path: filePath });
+      const name = filePath.split(/[\\/]/).filter(Boolean).pop() ?? filePath;
+      countsRef.current.note += 1;
+      const now = Date.now();
+      const offset = spawnOffset.current * 30;
+      spawnOffset.current = (spawnOffset.current + 1) % 8;
+      const w: WindowState = {
+        id: crypto.randomUUID(),
+        x: SIDEBAR_RIGHT_EDGE + offset,
+        y: 24 + offset,
+        width: 520,
+        height: 400,
+        zIndex: nextZRef.current++,
+        title: name,
+        workspaceId,
+        type: "note",
+        content,
+        createdAt: now,
+        updatedAt: now,
+      };
+      setWindows((prev) => [...prev, w]);
+      setActiveWindowId(w.id);
+      saveAfterUpdate();
+    } catch (err) {
+      console.error("[file-tree] Failed to open file:", err);
+    }
+  }, [saveAfterUpdate]);
+
   /** Called by TerminalWindow when PTY spawns — stores ptyId in-memory (not persisted). */
   const handlePtySpawned = useCallback((windowId: string, ptyId: string | null) => {
     setWindows((prev) =>
@@ -750,6 +781,7 @@ export default function App() {
           onArrangeWindows={arrangeWindows}
           onRenameWindow={renameWindow}
           onRemoveWindow={removeWindow}
+          onOpenFile={openFile}
         />
       ) : null}
 

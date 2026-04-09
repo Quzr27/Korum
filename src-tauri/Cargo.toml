@@ -15,6 +15,9 @@ uuid = { version = "1", features = ["v4"] }
 tauri-plugin-dialog = "2.6.0"
 tauri-plugin-clipboard-manager = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+ignore = "0.4"
+git2 = "0.19"
+notify-debouncer-mini = "0.5"
 
 [profile.dev]
 opt-level = 0

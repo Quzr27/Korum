@@ -72,6 +72,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { WindowState, Workspace, WorkspaceColor, WorkspaceIconKey } from "@/types";
 import { WORKSPACE_COLORS } from "@/types";
+import FileTree from "@/components/layout/FileTree";
 
 // biome-ignore format: icon map
 const WORKSPACE_ICONS: Record<WorkspaceIconKey, IconSvgElement> = {
@@ -416,6 +417,7 @@ interface SidebarProps {
   onArrangeWindows: () => void;
   onRenameWindow: (id: string, title: string) => void;
   onRemoveWindow: (id: string) => void;
+  onOpenFile: (filePath: string, workspaceId: string) => void;
 }
 
 export default function Sidebar({
@@ -424,6 +426,7 @@ export default function Sidebar({
   onFocusWindow, onAddNote, onSelectWorkspace,
   onUpdateWorkspace, onDeleteWorkspace,
   onArrangeWindows, onRenameWindow, onRemoveWindow,
+  onOpenFile,
 }: SidebarProps) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(false);
@@ -434,12 +437,14 @@ export default function Sidebar({
   // Track which workspaces are collapsed — expanded by default
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [openMenuWsId, setOpenMenuWsId] = useState<string | null>(null);
+  const [filePanelOpen, setFilePanelOpen] = useState(false);
 
   const [editName, setEditName] = useState("");
   const [editColor, setEditColor] = useState<WorkspaceColor>("green");
   const [editIcon, setEditIcon] = useState<WorkspaceIconKey>("code");
 
   const normalizedQuery = useMemo(() => query.trim().toLowerCase(), [query]);
+  const activeWs = useMemo(() => workspaces.find((ws) => ws.id === activeWorkspaceId), [workspaces, activeWorkspaceId]);
 
   const openEdit = useCallback((ws: Workspace) => {
     setEditWorkspace(ws);
@@ -494,7 +499,10 @@ export default function Sidebar({
     onSelectWorkspace(wsId);
     setCollapsedIds((prev) => { const next = new Set(prev); next.delete(wsId); return next; });
     setOpenMenuWsId(null);
-  }, [onSelectWorkspace]);
+    // Close file panel if new workspace has no rootPath
+    const ws = workspaces.find((w) => w.id === wsId);
+    if (!ws?.rootPath) setFilePanelOpen(false);
+  }, [onSelectWorkspace, workspaces]);
 
   if (collapsed) {
     return (
@@ -515,7 +523,10 @@ export default function Sidebar({
 
   return (
     <>
-      <aside className="glass fixed left-3 top-3 bottom-3 z-40 w-72 rounded-xl flex flex-col shadow-2xl shadow-black/25 overflow-hidden">
+      <aside className={cn(
+        "glass fixed left-3 top-3 bottom-3 z-40 w-72 flex flex-col shadow-2xl shadow-black/25 overflow-hidden",
+        filePanelOpen && activeWs?.rootPath ? "rounded-l-xl rounded-r-none" : "rounded-xl",
+      )}>
         {/* Header */}
         <div className="px-3 pt-3 pb-1.5">
           <Button
@@ -709,6 +720,24 @@ export default function Sidebar({
             <HugeiconsIcon icon={Layers01Icon} data-icon="inline-start" />
             New Workspace
           </Button>
+          {activeWs?.rootPath && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn("px-2", filePanelOpen && "bg-sidebar-accent text-sidebar-accent-foreground")}
+                  onClick={() => setFilePanelOpen((prev) => !prev)}
+                  aria-label="Toggle file tree"
+                  aria-pressed={filePanelOpen}
+                >
+                  <HugeiconsIcon icon={Folder01Icon} size={14} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top"><p>Files</p></TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button type="button" variant="ghost" size="sm" className="px-2" onClick={onAddNote} aria-label="Add note">
@@ -727,6 +756,54 @@ export default function Sidebar({
           </Tooltip>
         </div>
       </aside>
+
+      {/* File tree drawer — docked to sidebar right edge */}
+      {activeWs?.rootPath && (
+        <aside
+          className={cn(
+            "glass-subtle fixed top-3 bottom-3 z-39 w-60 rounded-r-xl flex flex-col overflow-hidden text-foreground",
+            "border border-l-0 border-border/30",
+            "shadow-xl shadow-black/15",
+            "motion-safe:transition-[transform,opacity] motion-safe:duration-200 motion-safe:ease-out",
+            filePanelOpen
+              ? "left-[calc(0.75rem+18rem)] opacity-100 translate-x-0"
+              : "left-[calc(0.75rem+18rem)] opacity-0 -translate-x-3 pointer-events-none",
+          )}
+        >
+          {/* Compact header */}
+          <div className="px-2.5 pt-2.5 pb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-[10px] text-muted-foreground/50 truncate" title={activeWs.rootPath}>
+                {activeWs.rootPath.replace(/^\/Users\/[^/]+/, "~")}
+              </span>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              className="text-muted-foreground/30 hover:text-muted-foreground shrink-0"
+              onClick={() => setFilePanelOpen(false)}
+              aria-label="Close file drawer"
+            >
+              <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+              </svg>
+            </Button>
+          </div>
+
+          <ScrollArea className="flex-1 min-h-0">
+            <div className="px-0.5 py-1">
+              {filePanelOpen && (
+                <FileTree
+                  rootPath={activeWs.rootPath}
+                  query={normalizedQuery}
+                  onOpenFile={(filePath) => onOpenFile(filePath, activeWs.id)}
+                />
+              )}
+            </div>
+          </ScrollArea>
+        </aside>
+      )}
 
       {/* Edit workspace dialog */}
       <Dialog open={!!editWorkspace} onOpenChange={(open) => { if (!open) setEditWorkspace(null); }}>

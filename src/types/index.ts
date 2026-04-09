@@ -46,6 +46,29 @@ export interface Workspace {
   rootPath?: string;
 }
 
+// ── File tree types ──
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  is_symlink: boolean;
+}
+
+export interface GitFileStatus {
+  path: string;
+  status: string;
+  insertions: number;
+  deletions: number;
+}
+
+export interface GitStatusResult {
+  statuses: GitFileStatus[];
+  changed_count: number;
+  insertions: number;
+  deletions: number;
+}
+
 /** Request to paste clipboard text into a terminal (may trigger confirmation dialog). */
 export interface PasteRequest {
   text: string;
