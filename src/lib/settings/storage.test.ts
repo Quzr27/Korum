@@ -41,6 +41,7 @@ describe("validateSettings", () => {
       terminalFont: "IBM Plex Mono",
       terminalFontSize: 16,
       terminalTheme: "dracula",
+      codeTheme: "dracula",
       canvasAtmosphere: "aurora",
       zoomSpeed: 2,
       showUsageLimits: true,
@@ -113,14 +114,14 @@ describe("validateSettings", () => {
     expect(validateSettings({ terminalFont: "SF Mono" }).terminalFont).toBe("JetBrains Mono");
   });
 
-  it("validates terminalFontSize range (10-20)", () => {
+  it("validates terminalFontSize range (10-30)", () => {
     expect(validateSettings({ terminalFontSize: 10 }).terminalFontSize).toBe(10);
-    expect(validateSettings({ terminalFontSize: 20 }).terminalFontSize).toBe(20);
+    expect(validateSettings({ terminalFontSize: 30 }).terminalFontSize).toBe(30);
     expect(validateSettings({ terminalFontSize: 15 }).terminalFontSize).toBe(15);
     expect(validateSettings({ terminalFontSize: 9 }).terminalFontSize).toBe(
       DEFAULT_SETTINGS.terminalFontSize,
     );
-    expect(validateSettings({ terminalFontSize: 21 }).terminalFontSize).toBe(
+    expect(validateSettings({ terminalFontSize: 31 }).terminalFontSize).toBe(
       DEFAULT_SETTINGS.terminalFontSize,
     );
     expect(validateSettings({ terminalFontSize: "14" }).terminalFontSize).toBe(
@@ -179,6 +180,7 @@ describe("parseSettings", () => {
       terminalFont: "JetBrains Mono",
       terminalFontSize: 13,
       terminalTheme: "oceanic-next",
+      codeTheme: "github-dark",
       canvasAtmosphere: "studio",
       zoomSpeed: 1,
       showUsageLimits: true,
@@ -281,6 +283,7 @@ describe("parseSettings", () => {
       terminalFont: "Source Code Pro",
       terminalFontSize: 18,
       terminalTheme: "dracula",
+      codeTheme: "monokai",
       canvasAtmosphere: "nocturne",
       zoomSpeed: 1.5,
       showUsageLimits: true,

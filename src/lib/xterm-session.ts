@@ -207,12 +207,23 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     container.addEventListener("mouseup", handleMouseZoom, true);
 
     // Visibility refresh (via VisibilityProvider — single global listener)
+    // Preserve scroll position across atlas clear + refresh to prevent
+    // scroll-to-top on focus return while PTY is actively writing data.
     registerVisibility(id, () => {
       term.clearSelection();
+      const buf = term.buffer.active;
+      const wasAtBottom = buf.viewportY >= buf.baseY;
+      const savedViewportY = buf.viewportY;
       term.clearTextureAtlas();
       requestAnimationFrame(() => {
-        if (termInstanceRef.current === term) {
-          term.refresh(0, term.rows - 1);
+        if (termInstanceRef.current !== term) return;
+        term.refresh(0, term.rows - 1);
+        // Restore: if user was scrolled to bottom, stay there (baseY may have
+        // changed from new data); otherwise restore exact viewport position.
+        if (wasAtBottom) {
+          term.scrollToBottom();
+        } else if (buf.viewportY !== savedViewportY) {
+          term.scrollLines(savedViewportY - buf.viewportY);
         }
       });
     });
@@ -266,6 +277,10 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     let cancelled = false;
     const fitTerminal = () => {
       if (cancelled || !mountedRef.current) return;
+      // Preserve scroll position across atlas clear + fit
+      const buf = term.buffer.active;
+      const wasAtBottom = buf.viewportY >= buf.baseY;
+      const savedViewportY = buf.viewportY;
       term.clearTextureAtlas();
       const fit = fitAddonRef.current;
       if (fit) {
@@ -274,6 +289,11 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
           const dims = fit.proposeDimensions();
           if (dims && ptyIdRef.current) invoke("resize_terminal", { id: ptyIdRef.current, rows: dims.rows, cols: dims.cols });
         } catch { /* ignore */ }
+      }
+      if (wasAtBottom) {
+        term.scrollToBottom();
+      } else if (buf.viewportY !== savedViewportY) {
+        term.scrollLines(savedViewportY - buf.viewportY);
       }
     };
 
@@ -308,14 +328,18 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
 
   // Re-fit when resized
   useEffect(() => {
+    const term = termInstanceRef.current;
     const fit = fitAddonRef.current;
-    if (!fit) return;
+    if (!fit || !term) return;
     requestAnimationFrame(() => {
+      const buf = term.buffer.active;
+      const wasAtBottom = buf.viewportY >= buf.baseY;
       try {
         fit.fit();
         const dims = fit.proposeDimensions();
         if (dims && ptyIdRef.current) invoke("resize_terminal", { id: ptyIdRef.current, rows: dims.rows, cols: dims.cols });
       } catch { /* ignore */ }
+      if (wasAtBottom) term.scrollToBottom();
     });
   }, [windowWidth, windowHeight]); // eslint-disable-line react-hooks/exhaustive-deps
 

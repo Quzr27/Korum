@@ -1,0 +1,93 @@
+/* ── Code table cells ── */
+.code-line {
+  height: 1.5em;
+}
+
+.code-gutter {
+  position: sticky;
+  left: 0;
+  min-width: 40px;
+  padding: 0 8px 0 12px;
+  text-align: right;
+  color: inherit;
+  opacity: 0.3;
+  user-select: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  background: inherit;
+}
+
+.code-cell {
+  padding: 0 12px 0 4px;
+  white-space: pre;
+}
+
+/* ── Diff mode ── */
+.diff-gutter-old {
+  min-width: 32px;
+  padding: 0 4px 0 8px;
+}
+
+.diff-gutter-new {
+  min-width: 32px;
+  padding: 0 4px;
+}
+
+.diff-add {
+  background: rgba(46, 160, 67, 0.12);
+}
+
+.diff-add .code-gutter,
+.diff-add .diff-gutter-old,
+.diff-add .diff-gutter-new {
+  background: rgba(46, 160, 67, 0.12);
+  color: #3fb950;
+  opacity: 1;
+}
+
+.diff-delete {
+  background: rgba(248, 81, 73, 0.12);
+}
+
+.diff-delete .code-gutter,
+.diff-delete .diff-gutter-old,
+.diff-delete .diff-gutter-new {
+  background: rgba(248, 81, 73, 0.12);
+  color: #f85149;
+  opacity: 1;
+}
+
+/* ── Scrollbar (pseudo-elements — CSS only) ── */
+.code-viewer::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.code-viewer::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.code-viewer::-webkit-scrollbar-thumb {
+  background: rgba(139, 148, 158, 0.2);
+  border-radius: 4px;
+}
+
+.code-viewer::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 148, 158, 0.35);
+}
+
+.code-viewer::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ── Minimap viewport indicator (imperative DOM element) ── */
+.code-minimap-viewport {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  background: rgba(139, 148, 158, 0.12);
+  border-top: 1px solid rgba(139, 148, 158, 0.2);
+  border-bottom: 1px solid rgba(139, 148, 158, 0.2);
+  pointer-events: none;
+  transition: top 0.05s linear;
+}

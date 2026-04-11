@@ -121,8 +121,11 @@ pub fn confirm_app_exit(
 // ── File tree commands ──
 
 #[tauri::command]
-pub fn read_directory(path: String) -> Result<Vec<crate::file_tree::FileEntry>, String> {
-    crate::file_tree::read_directory(&path)
+pub fn read_directory(
+    path: String,
+    show_ignored: Option<bool>,
+) -> Result<Vec<crate::file_tree::FileEntry>, String> {
+    crate::file_tree::read_directory(&path, show_ignored.unwrap_or(false))
 }
 
 #[tauri::command]
@@ -133,6 +136,16 @@ pub fn get_git_status(root_path: String) -> Result<crate::file_tree::GitStatusRe
 #[tauri::command]
 pub fn read_file_content(path: String) -> Result<String, String> {
     crate::file_tree::read_file_content(&path)
+}
+
+#[tauri::command]
+pub fn read_code_file_content(path: String) -> Result<String, String> {
+    crate::file_tree::read_code_file_content(&path)
+}
+
+#[tauri::command]
+pub fn get_file_diff(path: String, root: String) -> Result<Vec<crate::file_tree::DiffLine>, String> {
+    crate::file_tree::get_file_diff(&path, &root)
 }
 
 #[tauri::command]

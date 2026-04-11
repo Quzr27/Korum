@@ -3,6 +3,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Layers01Icon, Note01Icon, GridViewIcon, TerminalIcon } from "@hugeicons/core-free-icons";
 import TerminalWindow from "./TerminalWindow";
 import NoteWindow from "./NoteWindow";
+import CodeWindow from "./CodeWindow";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -13,7 +14,7 @@ import {
 import { useSettings } from "@/lib/settings-context";
 import { selectLiveTerminalIds } from "@/lib/live-terminals";
 import { isWindowInViewport } from "@/lib/viewport";
-import type { WindowState, WindowUpdatable, Workspace, Point2D, PasteRequest } from "@/types";
+import type { WindowState, WindowUpdatable, Workspace, Point2D, PasteRequest, CodeViewMode } from "@/types";
 import { WORKSPACE_COLORS } from "@/types";
 
 const MINIMAP_W = 160;
@@ -46,6 +47,7 @@ interface CanvasProps {
   onArrangeWindows: () => void;
   onCreateWorkspace: () => void;
   onPasteRequest: (request: PasteRequest) => void;
+  onViewModeChange: (id: string, mode: CodeViewMode) => void;
 }
 
 export default function Canvas({
@@ -74,6 +76,7 @@ export default function Canvas({
   onArrangeWindows,
   onCreateWorkspace,
   onPasteRequest,
+  onViewModeChange,
 }: CanvasProps) {
   const { settings } = useSettings();
   const [isPanning, setIsPanning] = useState(false);
@@ -235,9 +238,15 @@ export default function Canvas({
       const DRAG_THRESHOLD = 4;
       let panStarted = isMiddle;
 
+      const cancelAnimation = () => {
+        // Remove smooth-pan animation class to prevent CSS transition during drag
+        viewportRef.current?.querySelector(".canvas-world")?.classList.remove("animating");
+      };
+
       if (panStarted) {
         motionRef.current = true;
         viewportRef.current?.classList.add("panning");
+        cancelAnimation();
         setIsPanning(true);
       }
 
@@ -250,6 +259,7 @@ export default function Canvas({
           panStarted = true;
           motionRef.current = true;
           viewportRef.current?.classList.add("panning");
+          cancelAnimation();
           setIsPanning(true);
         }
 
@@ -325,28 +335,49 @@ export default function Canvas({
             const wsColor = ws ? WORKSPACE_COLORS[ws.color] : undefined;
             const shouldHydrate = hydratedTerminalIds.has(w.id) || bootingTerminalIds.has(w.id);
             const shouldAttach = liveSelection.liveTerminalIds.has(w.id);
-            return w.type === "terminal" ? (
-              <TerminalWindow
-                key={w.id}
-                id={w.id}
-                window={w}
-                isActive={activeWindowId === w.id}
-                shouldHydrate={shouldHydrate}
-                shouldAttach={shouldAttach}
-                terminalSnapshot={terminalSnapshots[w.id]}
-                zoomRef={zoomRef}
-                wsColor={wsColor}
-                cwd={w.initialCwd ?? ws?.rootPath}
-                onClose={onRemove}
-                onHydrationSettled={onTerminalHydrationSettled}
-                onPtySpawned={onPtySpawned}
-                onSnapshotCaptured={onTerminalSnapshotCaptured}
-                onUpdate={onUpdate}
-                onFocus={onFocus}
-                onRename={onRename}
-                onPasteRequest={onPasteRequest}
-              />
-            ) : (
+            if (w.type === "terminal") {
+              return (
+                <TerminalWindow
+                  key={w.id}
+                  id={w.id}
+                  window={w}
+                  isActive={activeWindowId === w.id}
+                  shouldHydrate={shouldHydrate}
+                  shouldAttach={shouldAttach}
+                  terminalSnapshot={terminalSnapshots[w.id]}
+                  zoomRef={zoomRef}
+                  wsColor={wsColor}
+                  cwd={w.initialCwd ?? ws?.rootPath}
+                  onClose={onRemove}
+                  onHydrationSettled={onTerminalHydrationSettled}
+                  onPtySpawned={onPtySpawned}
+                  onSnapshotCaptured={onTerminalSnapshotCaptured}
+                  onUpdate={onUpdate}
+                  onFocus={onFocus}
+                  onRename={onRename}
+                  onPasteRequest={onPasteRequest}
+                />
+              );
+            }
+            if (w.type === "code") {
+              return (
+                <CodeWindow
+                  key={w.id}
+                  id={w.id}
+                  window={w}
+                  isActive={activeWindowId === w.id}
+                  zoomRef={zoomRef}
+                  wsColor={wsColor}
+                  workspaceRoot={ws?.rootPath}
+                  onClose={onRemove}
+                  onUpdate={onUpdate}
+                  onFocus={onFocus}
+                  onRename={onRename}
+                  onViewModeChange={onViewModeChange}
+                />
+              );
+            }
+            return (
               <NoteWindow
                 key={w.id}
                 id={w.id}

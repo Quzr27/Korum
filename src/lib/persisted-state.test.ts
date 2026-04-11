@@ -57,7 +57,7 @@ describe("hydratePersistedState", () => {
     expect(hydrated.activeWorkspaceId).toBe("ws-1");
     expect(hydrated.pan).toEqual({ x: -50, y: -100 });
     expect(hydrated.zoom).toBe(1.2);
-    expect(hydrated.counts).toEqual({ terminal: 1, note: 1 });
+    expect(hydrated.counts).toEqual({ terminal: 1, note: 1, code: 0 });
     expect(hydrated.nextZ).toBe(3); // 2 windows → renormalized to 1,2 → nextZ=3
   });
 
@@ -300,6 +300,6 @@ describe("hydratePersistedState", () => {
     expect(hydrated.activeWorkspaceId).toBeNull();
     expect(hydrated.pan).toEqual({ x: DEFAULT_VIEWPORT.panX, y: DEFAULT_VIEWPORT.panY });
     expect(hydrated.zoom).toBe(DEFAULT_VIEWPORT.zoom);
-    expect(hydrated.counts).toEqual({ terminal: 0, note: 0 });
+    expect(hydrated.counts).toEqual({ terminal: 0, note: 0, code: 0 });
   });
 });
