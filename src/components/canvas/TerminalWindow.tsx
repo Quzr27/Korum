@@ -13,7 +13,8 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import type { TerminalWindow as TerminalWindowState, WindowUpdatable, ResizeEdge, PasteRequest } from "@/types";
+import { useDragResize } from "@/lib/use-drag-resize";
+import type { TerminalWindow as TerminalWindowState, WindowUpdatable, PasteRequest } from "@/types";
 
 // Lighten/darken a hex color
 function adjustBrightness(hex: string, amount: number): string {
@@ -81,13 +82,15 @@ export default memo(function TerminalWindow({
   onPasteRequest,
 }: Props) {
   const { settings } = useSettings();
+  const { windowRef, handleTitleMouseDown, handleEdgeResize } = useDragResize({
+    id, x: win.x, y: win.y, width: win.width, height: win.height,
+    zoomRef, onUpdate, onFocus, minWidth: 240, minHeight: 120,
+  });
   const termRef = useRef<HTMLDivElement>(null);
   const ptyIdRef = useRef<string | null>(null);
   const pendingDisposeRef = useRef<{ term: Terminal; timer: number } | null>(null);
   const mountedRef = useRef(false);
   const mountVersionRef = useRef(0);
-  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
-  const dragListenersRef = useRef<{ move: (e: MouseEvent) => void; up: () => void } | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState("");
   const [spawnError, setSpawnError] = useState<string | null>(null);
@@ -96,17 +99,6 @@ export default memo(function TerminalWindow({
   const hydrationSettledRef = useRef(false);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
-
-  // Clean up drag/resize document listeners on unmount (close mid-drag)
-  useEffect(() => {
-    return () => {
-      if (dragListenersRef.current) {
-        document.removeEventListener("mousemove", dragListenersRef.current.move);
-        document.removeEventListener("mouseup", dragListenersRef.current.up);
-        dragListenersRef.current = null;
-      }
-    };
-  }, []);
 
   const reportHydrationSettled = useCallback(() => {
     if (hydrationSettledRef.current) return;
@@ -196,7 +188,7 @@ export default memo(function TerminalWindow({
   }, [shouldHydrate, respawnTrigger]);
 
   // ── xterm session (Effect B + settings/focus/resize effects) ──
-  const { termInstanceRef, fitAddonRef, isSessionReady } = useXtermSession({
+  const { termInstanceRef, isSessionReady } = useXtermSession({
     id,
     isPtyReady,
     shouldAttach,
@@ -233,90 +225,6 @@ export default memo(function TerminalWindow({
     setRespawnTrigger((prev) => prev + 1);
   }, [id, onPtySpawned, onSnapshotCaptured]);
 
-  const handleTitleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      if ((e.target as HTMLElement).closest(".window-close")) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onFocus(id);
-      dragRef.current = { startX: e.clientX, startY: e.clientY, origX: win.x, origY: win.y };
-      const handleMove = (ev: MouseEvent) => {
-        if (!dragRef.current) return;
-        onUpdate(id, {
-          x: dragRef.current.origX + (ev.clientX - dragRef.current.startX) / zoomRef.current,
-          y: dragRef.current.origY + (ev.clientY - dragRef.current.startY) / zoomRef.current,
-        });
-      };
-      const handleUp = () => {
-        dragRef.current = null;
-        dragListenersRef.current = null;
-        document.removeEventListener("mousemove", handleMove);
-        document.removeEventListener("mouseup", handleUp);
-      };
-      dragListenersRef.current = { move: handleMove, up: handleUp };
-      document.addEventListener("mousemove", handleMove);
-      document.addEventListener("mouseup", handleUp);
-    },
-    [id, win.x, win.y, zoomRef, onUpdate, onFocus],
-  );
-
-  const handleEdgeResize = useCallback(
-    (e: React.MouseEvent, edge: ResizeEdge) => {
-      e.preventDefault();
-      e.stopPropagation();
-      onFocus(id);
-      const start = { x: e.clientX, y: e.clientY, w: win.width, h: win.height, wx: win.x, wy: win.y };
-      const growsRight = edge.includes("e");
-      const growsDown = edge.includes("s");
-      const movesLeft = edge.includes("w");
-      const movesTop = edge.includes("n");
-
-      const handleMove = (ev: MouseEvent) => {
-        const dx = (ev.clientX - start.x) / zoomRef.current;
-        const dy = (ev.clientY - start.y) / zoomRef.current;
-        const updates: Partial<WindowUpdatable> = {};
-
-        if (growsRight) {
-          updates.width = Math.max(300, start.w + dx);
-        }
-        if (movesLeft) {
-          const newW = Math.max(300, start.w - dx);
-          updates.width = newW;
-          updates.x = start.wx + (start.w - newW);
-        }
-        if (growsDown) {
-          updates.height = Math.max(150, start.h + dy);
-        }
-        if (movesTop) {
-          const newH = Math.max(150, start.h - dy);
-          updates.height = newH;
-          updates.y = start.wy + (start.h - newH);
-        }
-
-        onUpdate(id, updates);
-      };
-      const handleUp = () => {
-        dragListenersRef.current = null;
-        document.removeEventListener("mousemove", handleMove);
-        document.removeEventListener("mouseup", handleUp);
-        if (fitAddonRef.current && ptyIdRef.current) {
-          const fit = fitAddonRef.current;
-          requestAnimationFrame(() => {
-            try {
-              fit.fit();
-              const dims = fit.proposeDimensions();
-              if (dims && ptyIdRef.current) invoke("resize_terminal", { id: ptyIdRef.current, rows: dims.rows, cols: dims.cols });
-            } catch { /* renderer not ready */ }
-          });
-        }
-      };
-      dragListenersRef.current = { move: handleMove, up: handleUp };
-      document.addEventListener("mousemove", handleMove);
-      document.addEventListener("mouseup", handleUp);
-    },
-    [id, win.x, win.y, win.width, win.height, zoomRef, onUpdate, onFocus, fitAddonRef],
-  );
-
   const startRename = useCallback(() => {
     setRenameVal(win.title);
     // Delay so Radix context menu finishes closing and focus restore before we show the input
@@ -341,7 +249,9 @@ export default memo(function TerminalWindow({
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
+          ref={windowRef}
           className="window"
+          data-window-id={id}
           data-active={isActive}
           style={{
             left: win.x,

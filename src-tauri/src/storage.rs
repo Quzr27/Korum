@@ -69,11 +69,11 @@ fn is_valid_window_shape(value: &serde_json::Value) -> bool {
         return false;
     };
 
-    if kind != "terminal" && kind != "note" {
+    if kind != "terminal" && kind != "note" && kind != "code" {
         return false;
     }
 
-    value.is_object()
+    let base_valid = value.is_object()
         && has_string_field(value, "id")
         && has_string_field(value, "title")
         && has_string_field(value, "workspaceId")
@@ -82,11 +82,24 @@ fn is_valid_window_shape(value: &serde_json::Value) -> bool {
         && has_number_field(value, "width")
         && has_number_field(value, "height")
         && has_number_field(value, "zIndex")
-        && has_optional_string_field(value, "terminalId")
-        && has_optional_string_field(value, "initialCwd")
-        && has_optional_string_field(value, "content")
         && has_optional_number_field(value, "createdAt")
-        && has_optional_number_field(value, "updatedAt")
+        && has_optional_number_field(value, "updatedAt");
+
+    base_valid && match kind {
+        "terminal" => {
+            has_optional_string_field(value, "terminalId")
+                && has_optional_string_field(value, "initialCwd")
+        }
+        "note" => {
+            has_optional_string_field(value, "content")
+                && has_optional_string_field(value, "sourcePath")
+        }
+        "code" => {
+            has_string_field(value, "sourcePath")
+                && has_optional_string_field(value, "viewMode")
+        }
+        _ => false,
+    }
 }
 
 fn is_valid_viewport_shape(value: &serde_json::Value) -> bool {
@@ -126,6 +139,7 @@ fn is_valid_settings_shape(value: &serde_json::Value) -> bool {
         && has_string_field(value, "terminalFont")
         && has_number_field(value, "terminalFontSize")
         && has_string_field(value, "terminalTheme")
+        && has_optional_string_field(value, "codeTheme") // new field — optional for backward compat
         && has_string_field(value, "canvasAtmosphere")
         && has_number_field(value, "zoomSpeed")
 }

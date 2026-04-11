@@ -8,7 +8,8 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import type { NoteWindow as NoteWindowState, WindowUpdatable, ResizeEdge } from "@/types";
+import { useDragResize } from "@/lib/use-drag-resize";
+import type { NoteWindow as NoteWindowState, WindowUpdatable } from "@/types";
 
 interface Props {
   id: string;
@@ -51,94 +52,19 @@ const SAFE_MD_COMPONENTS: Components = {
 };
 
 export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, wsColor, onClose, onUpdate, onFocus, onRename, onContentChange }: Props) {
-  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
-  const dragListenersRef = useRef<{ move: (e: MouseEvent) => void; up: () => void } | null>(null);
+  const { windowRef, handleTitleMouseDown, handleEdgeResize } = useDragResize({
+    id, x: win.x, y: win.y, width: win.width, height: win.height,
+    zoomRef, onUpdate, onFocus,
+  });
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Clean up drag/resize document listeners on unmount (close mid-drag)
-  useEffect(() => {
-    return () => {
-      if (dragListenersRef.current) {
-        document.removeEventListener("mousemove", dragListenersRef.current.move);
-        document.removeEventListener("mouseup", dragListenersRef.current.up);
-        dragListenersRef.current = null;
-      }
-    };
-  }, []);
-
   const content = win.content ?? "";
   const hasContent = content.length > 0;
   const accent = wsColor ?? "var(--muted-foreground)";
-
-  const handleTitleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      if ((e.target as HTMLElement).closest(".note-close")) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onFocus(id);
-      dragRef.current = { startX: e.clientX, startY: e.clientY, origX: win.x, origY: win.y };
-      const handleMove = (ev: MouseEvent) => {
-        if (!dragRef.current) return;
-        onUpdate(id, {
-          x: dragRef.current.origX + (ev.clientX - dragRef.current.startX) / zoomRef.current,
-          y: dragRef.current.origY + (ev.clientY - dragRef.current.startY) / zoomRef.current,
-        });
-      };
-      const handleUp = () => {
-        dragRef.current = null;
-        dragListenersRef.current = null;
-        document.removeEventListener("mousemove", handleMove);
-        document.removeEventListener("mouseup", handleUp);
-      };
-      dragListenersRef.current = { move: handleMove, up: handleUp };
-      document.addEventListener("mousemove", handleMove);
-      document.addEventListener("mouseup", handleUp);
-    },
-    [id, win.x, win.y, zoomRef, onUpdate, onFocus],
-  );
-
-  const handleEdgeResize = useCallback(
-    (e: React.MouseEvent, edge: ResizeEdge) => {
-      e.preventDefault();
-      e.stopPropagation();
-      onFocus(id);
-      const start = { x: e.clientX, y: e.clientY, w: win.width, h: win.height, wx: win.x, wy: win.y };
-      const movesLeft = edge.includes("w");
-      const movesTop = edge.includes("n");
-
-      const handleMove = (ev: MouseEvent) => {
-        const dx = (ev.clientX - start.x) / zoomRef.current;
-        const dy = (ev.clientY - start.y) / zoomRef.current;
-        const updates: Partial<WindowUpdatable> = {};
-
-        if (edge.includes("e")) updates.width = Math.max(180, start.w + dx);
-        if (movesLeft) {
-          const newW = Math.max(180, start.w - dx);
-          updates.width = newW;
-          updates.x = start.wx + (start.w - newW);
-        }
-        if (edge.includes("s")) updates.height = Math.max(100, start.h + dy);
-        if (movesTop) {
-          const newH = Math.max(100, start.h - dy);
-          updates.height = newH;
-          updates.y = start.wy + (start.h - newH);
-        }
-        onUpdate(id, updates);
-      };
-      const handleUp = () => {
-        dragListenersRef.current = null;
-        document.removeEventListener("mousemove", handleMove);
-        document.removeEventListener("mouseup", handleUp);
-      };
-      dragListenersRef.current = { move: handleMove, up: handleUp };
-      document.addEventListener("mousemove", handleMove);
-      document.addEventListener("mouseup", handleUp);
-    },
-    [id, win.x, win.y, win.width, win.height, zoomRef, onUpdate, onFocus],
-  );
+  const sourcePathLabel = win.sourcePath?.replace(/^\/Users\/[^/]+/, "~");
 
   const startRename = useCallback(() => {
     setRenameVal(win.title);
@@ -180,7 +106,9 @@ export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, ws
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
+          ref={windowRef}
           className="window"
+          data-window-id={id}
           data-active={isActive}
           style={{
             left: win.x,
@@ -229,13 +157,22 @@ export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, ws
           </div>
 
           {/* Metadata bar — badge + dates */}
-          <div className="flex shrink-0 items-center gap-2.5 border-b border-border/50 px-3 py-1.5">
+          <div className="flex min-w-0 shrink-0 items-center gap-2.5 border-b border-border/50 px-3 py-1.5">
             <span
               className="rounded px-1.5 py-px text-[9px] font-bold uppercase tracking-wider"
               style={{ color: accent, background: `color-mix(in oklch, ${accent} 14%, transparent)` }}
             >
-              Note
+              {win.sourcePath ? "File" : "Note"}
             </span>
+            {sourcePathLabel && (
+              <span
+                className="min-w-0 truncate text-[10px] text-muted-foreground/45"
+                title={sourcePathLabel}
+                translate="no"
+              >
+                {sourcePathLabel}
+              </span>
+            )}
             <span className="text-[10px] tabular-nums text-muted-foreground/60">
               {formatDate(win.createdAt)}
             </span>

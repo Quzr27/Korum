@@ -284,7 +284,7 @@ export default function SettingsPanel({ dismissVersion = 0 }: SettingsPanelProps
             <SettingRow label={`Font Size: ${fontSizeDraft}px`}>
               <Slider
                 min={10}
-                max={20}
+                max={30}
                 step={1}
                 value={[fontSizeDraft]}
                 onValueChange={(values) => setFontSizeDraft(values[0] ?? settings.terminalFontSize)}

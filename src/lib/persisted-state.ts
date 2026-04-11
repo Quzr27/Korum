@@ -88,7 +88,7 @@ function sanitizeWindow(value: unknown, defaults: WindowDefaults): WindowState |
     typeof value.id !== "string" ||
     typeof value.workspaceId !== "string" ||
     typeof value.type !== "string" ||
-    (value.type !== "terminal" && value.type !== "note")
+    (value.type !== "terminal" && value.type !== "note" && value.type !== "code")
   ) {
     return null;
   }
@@ -98,7 +98,9 @@ function sanitizeWindow(value: unknown, defaults: WindowDefaults): WindowState |
       ? value.title
       : value.type === "terminal"
         ? "Terminal"
-        : "Note";
+        : value.type === "code"
+          ? "Code"
+          : "Note";
 
   const safeNum = (v: unknown, fallback: number) =>
     typeof v === "number" && Number.isFinite(v) ? v : fallback;
@@ -136,10 +138,20 @@ function sanitizeWindow(value: unknown, defaults: WindowDefaults): WindowState |
       initialCwd: typeof value.initialCwd === "string" ? value.initialCwd : undefined,
     };
   }
+  if (value.type === "code") {
+    if (typeof value.sourcePath !== "string" || value.sourcePath === "") return null;
+    return {
+      ...base,
+      type: "code",
+      sourcePath: value.sourcePath,
+      viewMode: value.viewMode === "changes" ? "changes" : "file",
+    };
+  }
   return {
     ...base,
     type: "note",
     content: typeof value.content === "string" ? value.content : "",
+    sourcePath: typeof value.sourcePath === "string" ? value.sourcePath : undefined,
   };
 }
 
@@ -182,7 +194,7 @@ export function hydratePersistedState(
 
   // Renormalize z-indices to 1..N preserving relative order.
   // This heals corrupt/inflated values and keeps nextZ bounded.
-  const counts: Record<WindowKind, number> = { terminal: 0, note: 0 };
+  const counts: Record<WindowKind, number> = { terminal: 0, note: 0, code: 0 };
   if (windows.length > 0) {
     const sorted = windows
       .map((w, i) => ({ i, z: w.zIndex }))

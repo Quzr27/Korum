@@ -1,9 +1,10 @@
 // ── Settings validation, parsing, and localStorage helpers ──
 
-import type { Settings, BaseColor, CanvasAtmosphere, RadiusPreset, ZoomSpeed } from "./types";
+import type { Settings, BaseColor, CodeTheme, CanvasAtmosphere, RadiusPreset, ZoomSpeed } from "./types";
 import {
   DEFAULT_SETTINGS,
   BASE_COLOR_LABELS,
+  CODE_THEMES,
   CANVAS_ATMOSPHERES,
   RADIUS_PRESETS,
   ZOOM_SPEED_OPTIONS,
@@ -30,9 +31,11 @@ export function validateSettings(raw: unknown): Settings {
     radius: (RADIUS_PRESETS as readonly number[]).includes(p.radius as number)
       ? p.radius as RadiusPreset : DEFAULT_SETTINGS.radius,
     terminalFont: normalizeTerminalFont(p.terminalFont),
-    terminalFontSize: typeof p.terminalFontSize === "number" && p.terminalFontSize >= 10 && p.terminalFontSize <= 20
+    terminalFontSize: typeof p.terminalFontSize === "number" && p.terminalFontSize >= 10 && p.terminalFontSize <= 30
       ? p.terminalFontSize : DEFAULT_SETTINGS.terminalFontSize,
     terminalTheme: normalizeTerminalTheme(p.terminalTheme),
+    codeTheme: typeof p.codeTheme === "string" && (CODE_THEMES as readonly string[]).includes(p.codeTheme)
+      ? p.codeTheme as CodeTheme : DEFAULT_SETTINGS.codeTheme,
     canvasAtmosphere:
       typeof p.canvasAtmosphere === "string" &&
       (CANVAS_ATMOSPHERES as readonly string[]).includes(p.canvasAtmosphere)
@@ -57,7 +60,7 @@ export function parseSettings(raw: unknown): { settings: Settings; isFullyValid:
   const isBaseColorValid = typeof p.baseColor === "string" && p.baseColor in BASE_COLOR_LABELS;
   const isRadiusValid = (RADIUS_PRESETS as readonly number[]).includes(p.radius as number);
   const isTerminalFontValid = typeof p.terminalFont === "string" && (TERMINAL_FONTS as readonly string[]).includes(p.terminalFont);
-  const isTerminalFontSizeValid = typeof p.terminalFontSize === "number" && p.terminalFontSize >= 10 && p.terminalFontSize <= 20;
+  const isTerminalFontSizeValid = typeof p.terminalFontSize === "number" && p.terminalFontSize >= 10 && p.terminalFontSize <= 30;
   const isTerminalThemeValid =
     typeof p.terminalTheme === "string" &&
     (
@@ -70,6 +73,9 @@ export function parseSettings(raw: unknown): { settings: Settings; isFullyValid:
     (typeof p.canvasAtmosphere === "string" &&
     (CANVAS_ATMOSPHERES as readonly string[]).includes(p.canvasAtmosphere));
   const isZoomSpeedValid = (ZOOM_SPEED_OPTIONS as readonly number[]).includes(p.zoomSpeed as number);
+  // codeTheme: treat missing field as valid (new field, existing settings files won't have it)
+  const isCodeThemeValid = p.codeTheme === undefined ||
+    (typeof p.codeTheme === "string" && (CODE_THEMES as readonly string[]).includes(p.codeTheme));
   // showUsageLimits: treat missing field as valid (new field, existing settings files won't have it)
   const isShowUsageLimitsValid = p.showUsageLimits === undefined || typeof p.showUsageLimits === "boolean";
 
@@ -82,6 +88,7 @@ export function parseSettings(raw: unknown): { settings: Settings; isFullyValid:
       isTerminalFontValid &&
       isTerminalFontSizeValid &&
       isTerminalThemeValid &&
+      isCodeThemeValid &&
       isCanvasAtmosphereValid &&
       isZoomSpeedValid &&
       isShowUsageLimitsValid,

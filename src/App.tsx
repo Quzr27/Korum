@@ -1,8 +1,8 @@
-import { startTransition, useCallback, useEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import Sidebar, { CreateWorkspaceDialog } from "@/components/layout/Sidebar";
+import Sidebar, { CreateWorkspaceDialog, type SidebarWindow } from "@/components/layout/Sidebar";
 import SettingsPanel from "@/components/layout/SettingsPanel";
 import QuitGuardDialog from "@/components/layout/QuitGuardDialog";
 import PasteConfirmDialog from "@/components/layout/PasteConfirmDialog";
@@ -21,7 +21,7 @@ import {
 import { isWindowInViewport } from "@/lib/viewport";
 import { confirmAppQuit, QUIT_REQUESTED_EVENT } from "@/lib/quit-guard";
 import type { PersistedState, ViewportState } from "@/lib/persistence";
-import type { WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest } from "@/types";
+import type { WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest, CodeViewMode } from "@/types";
 
 interface AppSnapshot {
   workspaces: Workspace[];
@@ -41,7 +41,7 @@ export default function App() {
 
   // ── Core state ──
   const nextZRef = useRef(1);
-  const countsRef = useRef<Record<WindowKind, number>>({ terminal: 0, note: 0 });
+  const countsRef = useRef<Record<WindowKind, number>>({ terminal: 0, note: 0, code: 0 });
   const spawnOffset = useRef(0);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
@@ -82,6 +82,9 @@ export default function App() {
   const stateRef = useRef<AppSnapshot>({ workspaces, windows, activeWorkspaceId, pan, zoom });
   stateRef.current = { workspaces, windows, activeWorkspaceId, pan, zoom };
 
+  // ── Pending z-index overrides (avoids direct mutation of state objects) ──
+  const pendingZIndexRef = useRef<Map<string, number>>(new Map());
+
   // ── Save infrastructure ──
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const confirmedExitRef = useRef(false);
@@ -94,10 +97,12 @@ export default function App() {
       savedAt: Date.now(),
       activeWorkspaceId,
       workspaces,
-      // Strip session-only ptyId before persisting
-      windows: windows.map((w): WindowState =>
-        w.type === "terminal" ? (({ ptyId: _, ...rest }) => rest)(w) : w,
-      ),
+      // Strip session-only ptyId before persisting; merge pending z-index overrides
+      windows: windows.map((w): WindowState => {
+        const pendingZ = pendingZIndexRef.current.get(w.id);
+        const withZ = pendingZ != null ? { ...w, zIndex: pendingZ } : w;
+        return withZ.type === "terminal" ? (({ ptyId: _, ...rest }) => rest)(withZ) : withZ;
+      }),
       viewports: { ...viewportsRef.current },
       nextZ: nextZRef.current,
     };
@@ -135,7 +140,7 @@ export default function App() {
       terminalSnapshotsRef.current = {};
       setHydratedTerminalIds(new Set());
       setBootingTerminalIds(new Set());
-      countsRef.current = { terminal: 0, note: 0 };
+      countsRef.current = { terminal: 0, note: 0, code: 0 };
       setPan({ x: 0, y: 0 });
       setZoom(1);
       viewportsRef.current = {};
@@ -352,8 +357,8 @@ export default function App() {
       id: crypto.randomUUID(),
       x: SIDEBAR_RIGHT_EDGE + offset,
       y: 24 + offset,
-      width: type === "terminal" ? 640 : 420,
-      height: type === "terminal" ? 400 : 320,
+      width: type === "terminal" ? 820 : 420,
+      height: type === "terminal" ? 600 : 320,
       zIndex: nextZRef.current++,
       title,
       workspaceId: wsId,
@@ -371,6 +376,50 @@ export default function App() {
     setWindows((prev) => [...prev, w]);
     setActiveWindowId(w.id);
     saveAfterUpdate(); // immediate — structural change
+  }, [saveAfterUpdate]);
+
+  /** Opens a file from the file tree as a CodeWindow (read-only, syntax highlighted). */
+  const openFile = useCallback((filePath: string, workspaceId: string) => {
+    // Check for existing CodeWindow or legacy NoteWindow with same source
+    const existing = stateRef.current.windows.find(
+      (w) => w.workspaceId === workspaceId &&
+        ((w.type === "code" && w.sourcePath === filePath) ||
+         (w.type === "note" && w.sourcePath === filePath)),
+    );
+
+    if (existing) {
+      // DOM-direct focus (same pattern as focusWindow, inlined to avoid declaration order)
+      const z = nextZRef.current++;
+      const el = document.querySelector<HTMLElement>(`.canvas-world [data-window-id="${existing.id}"]`);
+      if (el) el.style.zIndex = String(z);
+      pendingZIndexRef.current.set(existing.id, z);
+      setActiveWindowId(existing.id);
+      return;
+    }
+
+    const name = filePath.split(/[\\/]/).filter(Boolean).pop() ?? filePath;
+    countsRef.current.code += 1;
+    const now = Date.now();
+    const offset = spawnOffset.current * 30;
+    spawnOffset.current = (spawnOffset.current + 1) % 8;
+    const w: WindowState = {
+      id: crypto.randomUUID(),
+      x: SIDEBAR_RIGHT_EDGE + offset,
+      y: 24 + offset,
+      width: 820,
+      height: 600,
+      zIndex: nextZRef.current++,
+      title: name,
+      workspaceId,
+      type: "code",
+      sourcePath: filePath,
+      viewMode: "file",
+      createdAt: now,
+      updatedAt: now,
+    };
+    setWindows((prev) => [...prev, w]);
+    setActiveWindowId(w.id);
+    saveAfterUpdate();
   }, [saveAfterUpdate]);
 
   /** Called by TerminalWindow when PTY spawns — stores ptyId in-memory (not persisted). */
@@ -427,6 +476,7 @@ export default function App() {
       invoke("kill_terminal", { id: win.ptyId }).catch(() => {});
     }
     delete terminalSnapshotsRef.current[id];
+    pendingZIndexRef.current.delete(id);
     // Dismiss paste dialog if it belongs to the terminal being closed
     setPasteConfirmState((prev) => (prev?.terminalId === id ? null : prev));
     setWindows((prev) => {
@@ -451,16 +501,25 @@ export default function App() {
     scheduleSave(500); // note editing debounce
   }, [scheduleSave]);
 
+  const setCodeViewMode = useCallback((id: string, mode: CodeViewMode) => {
+    setWindows((prev) => prev.map((w) => (w.id === id && w.type === "code" ? { ...w, viewMode: mode } : w)));
+    saveAfterUpdate();
+  }, [saveAfterUpdate]);
+
   const renameWindow = useCallback((id: string, title: string) => {
     setWindows((prev) => prev.map((w) => (w.id === id ? { ...w, title, updatedAt: Date.now() } : w)));
     saveAfterUpdate(); // immediate — structural change
   }, [saveAfterUpdate]);
 
   const focusWindow = useCallback((id: string) => {
+    // Apply z-index directly via DOM — no React re-render for z stacking.
+    // zIndex is session-ephemeral; it's captured from refs on the next save trigger.
     const z = nextZRef.current++;
-    setWindows((prev) => prev.map((w) => (w.id === id ? { ...w, zIndex: z } : w)));
+    const el = document.querySelector<HTMLElement>(`.canvas-world [data-window-id="${id}"]`);
+    if (el) el.style.zIndex = String(z);
+    // Store updated zIndex in pending ref — merged on next save (no state mutation)
+    pendingZIndexRef.current.set(id, z);
     setActiveWindowId(id);
-    // No save — z-index is session-ephemeral, captured on next save trigger
   }, []);
 
   const arrangeWindows = useCallback(() => {
@@ -473,9 +532,11 @@ export default function App() {
       const maxRowWidth = Math.max((window.innerWidth - SIDEBAR_RIGHT_EDGE - GRID_GAP) / currentZoom, 800);
       const positions = new Map<string, { x: number; y: number }>();
 
-      // Group by type — notes first (top), terminals below
-      const terminals = wsWindows.filter((w) => w.type === "terminal");
+      // Group by type — notes first, then code files, then terminals
       const notes = wsWindows.filter((w) => w.type === "note");
+      const code = wsWindows.filter((w) => w.type === "code");
+      const terminals = wsWindows.filter((w) => w.type === "terminal");
+      const groups = [notes, code, terminals].filter((g) => g.length > 0);
 
       // Layout a group in rows, returns the Y after the last row
       const layoutGroup = (group: WindowState[], startY: number): number => {
@@ -495,9 +556,11 @@ export default function App() {
         return group.length > 0 ? curY + rowHeight : startY;
       };
 
-      let bottomY = layoutGroup(notes, GRID_TOP);
-      if (notes.length > 0 && terminals.length > 0) bottomY += GRID_GAP;
-      layoutGroup(terminals, bottomY);
+      let bottomY = GRID_TOP;
+      for (let i = 0; i < groups.length; i++) {
+        if (i > 0) bottomY += GRID_GAP;
+        bottomY = layoutGroup(groups[i], bottomY);
+      }
 
       return prev.map((w) => {
         const pos = positions.get(w.id);
@@ -551,6 +614,7 @@ export default function App() {
       }
       if (win.workspaceId === id) {
         delete terminalSnapshotsRef.current[win.id];
+        pendingZIndexRef.current.delete(win.id);
       }
     }
     setWorkspaces((prev) => {
@@ -575,7 +639,7 @@ export default function App() {
       }
       // Reset naming counters when no windows remain
       if (next.length === 0) {
-        countsRef.current = { terminal: 0, note: 0 };
+        countsRef.current = { terminal: 0, note: 0, code: 0 };
       }
       return next;
     });
@@ -606,13 +670,23 @@ export default function App() {
     if (win.workspaceId !== stateRef.current.activeWorkspaceId) {
       switchWorkspace(win.workspaceId);
     }
+    // Smooth pan to the window — add transition class, remove after animation
+    const world = document.querySelector<HTMLElement>(".canvas-world");
+    if (world) {
+      world.classList.add("animating");
+      const cleanup = () => { world.classList.remove("animating"); world.removeEventListener("transitionend", cleanup); };
+      world.addEventListener("transitionend", cleanup, { once: true });
+      // Safety fallback — remove class after 400ms if transitionend doesn't fire
+      setTimeout(cleanup, 400);
+    }
     // Center viewport on the window at zoom 1.0 — offset for sidebar
     const targetZoom = 1;
     const centerX = win.x + win.width / 2;
     const centerY = win.y + win.height / 2;
     const vpW = window.innerWidth;
     const vpH = window.innerHeight;
-    const visibleCenterX = (SIDEBAR_RIGHT_EDGE + vpW) / 2;
+    const fileDrawerW = document.querySelector('.sidebar-file-drawer[data-state="open"]') ? 240 : 0;
+    const visibleCenterX = (SIDEBAR_RIGHT_EDGE + fileDrawerW + vpW) / 2;
     setPan({ x: visibleCenterX - centerX * targetZoom, y: vpH / 2 - centerY * targetZoom });
     setZoom(targetZoom);
     focusWindow(id);
@@ -696,6 +770,26 @@ export default function App() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [addWindow, removeWindow, arrangeWindows]);
 
+  // ── Sidebar window projection (excludes geometry → stable during drag/resize) ──
+  const sidebarWindowsKeyRef = useRef("");
+  const sidebarWindowsCacheRef = useRef<SidebarWindow[]>([]);
+  const sidebarWindows = useMemo(() => {
+    // Build a key from only the fields sidebar cares about
+    const key = windows
+      .map((w) => `${w.id}|${w.type}|${w.title}|${w.workspaceId}|${"sourcePath" in w ? w.sourcePath : ""}`)
+      .join("\n");
+    if (key === sidebarWindowsKeyRef.current) return sidebarWindowsCacheRef.current;
+    sidebarWindowsKeyRef.current = key;
+    sidebarWindowsCacheRef.current = windows.map((w) => ({
+      id: w.id,
+      type: w.type,
+      title: w.title,
+      workspaceId: w.workspaceId,
+      sourcePath: "sourcePath" in w ? w.sourcePath : undefined,
+    }));
+    return sidebarWindowsCacheRef.current;
+  }, [windows]);
+
   // ── Loading screen ──
   if (!loaded) {
     return (
@@ -733,11 +827,12 @@ export default function App() {
         onArrangeWindows={arrangeWindows}
         onCreateWorkspace={() => setCreateDialogOpen(true)}
         onPasteRequest={handlePasteRequest}
+        onViewModeChange={setCodeViewMode}
       />
 
       {hasWorkspaces ? (
         <Sidebar
-          windows={windows}
+          windows={sidebarWindows}
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspaceId}
           activeWindowId={activeWindowId}
@@ -750,6 +845,7 @@ export default function App() {
           onArrangeWindows={arrangeWindows}
           onRenameWindow={renameWindow}
           onRemoveWindow={removeWindow}
+          onOpenFile={openFile}
         />
       ) : null}
 
@@ -791,7 +887,12 @@ export default function App() {
           <button
             type="button"
             className="glass-subtle flex h-8 cursor-pointer items-center justify-center rounded-lg text-[11px] font-medium tabular-nums text-muted-foreground transition-colors select-none hover:text-foreground"
-            onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
+            onClick={() => {
+              setZoom(1);
+              // Offset pan.x so content starts after file tree drawer if open (w-60 = 240px)
+              const fileDrawerOpen = !!document.querySelector('.sidebar-file-drawer[data-state="open"]');
+              setPan({ x: fileDrawerOpen ? 240 : 0, y: 0 });
+            }}
             aria-label="Reset viewport"
           >
             {Math.round(zoom * 100)}%

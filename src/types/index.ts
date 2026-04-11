@@ -1,6 +1,6 @@
 export type Point2D = { x: number; y: number };
 
-export type WindowKind = "terminal" | "note";
+export type WindowKind = "terminal" | "note" | "code";
 
 export interface BaseWindow {
   id: string;
@@ -25,9 +25,18 @@ export interface TerminalWindow extends BaseWindow {
 export interface NoteWindow extends BaseWindow {
   type: "note";
   content?: string;
+  sourcePath?: string;
 }
 
-export type WindowState = TerminalWindow | NoteWindow;
+export type CodeViewMode = "file" | "changes";
+
+export interface CodeWindow extends BaseWindow {
+  type: "code";
+  sourcePath: string;
+  viewMode: CodeViewMode;
+}
+
+export type WindowState = TerminalWindow | NoteWindow | CodeWindow;
 
 /** Fields safe to mutate via drag/resize. */
 export type WindowUpdatable = Pick<BaseWindow, "x" | "y" | "width" | "height">;
@@ -44,6 +53,38 @@ export interface Workspace {
   color: WorkspaceColor;
   icon: WorkspaceIconKey;
   rootPath?: string;
+}
+
+// ── File tree types ──
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  is_symlink: boolean;
+  is_ignored: boolean;
+  child_count?: number;
+}
+
+export interface GitFileStatus {
+  path: string;
+  status: string;
+  insertions: number;
+  deletions: number;
+}
+
+export interface GitStatusResult {
+  statuses: GitFileStatus[];
+  changed_count: number;
+  insertions: number;
+  deletions: number;
+}
+
+export interface DiffLine {
+  origin: "add" | "delete" | "context";
+  old_lineno: number | null;
+  new_lineno: number | null;
+  content: string;
 }
 
 /** Request to paste clipboard text into a terminal (may trigger confirmation dialog). */
