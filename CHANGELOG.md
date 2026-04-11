@@ -4,6 +4,25 @@ All notable changes to Korum will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.0-alpha] - 2026-04-11
+
+### Added
+- **File tree sidebar** — per-workspace file browser with .gitignore filtering, git status badges (M/A/D/?), folder child counts, show-ignored toggle, context menu CRUD (create/rename/delete), debounced file watcher, watcher error indicator
+- **Code viewer** — read-only CodeWindow with Shiki syntax highlighting (16 themes, lazy language + theme loading), line numbers, inline diff view (Changes mode), theme selector with color swatches, minimap with click-to-navigate, auto-refresh on file changes
+- **Material file icons** — 200+ file/folder icon mappings via @iconify/react + material-icon-theme (bundled, no CDN)
+- **Language detection** — file extension → Shiki language mapping (~40 extensions + special filenames)
+- **Drag/resize hook** — shared `useDragResize` for all window types (GPU-accelerated transform, zero re-renders during motion)
+- **Process detection** — foreground process polling with status dots in sidebar + titlebar
+
+### Fixed
+- **Release build: icons not loading** — bundled icon collection via `addCollection()` at startup (CSP blocked CDN fetch)
+- **Release build: code viewer blank** — added `'wasm-unsafe-eval'` to CSP for Shiki's Oniguruma WASM engine
+
+### Internal
+- 58 new tests: `confine_path` (6), `confine_new_path` (4), `read_directory` (7) with .gitignore coverage, `detectLanguage` (10), `getFileIconName` (31)
+- New Rust module: `file_tree.rs` (directory reading, git status, file CRUD, path confinement, file watching)
+- Path confinement security: all mutating file ops verified against workspace root
+
 ## [0.1.1-alpha] - 2026-04-08
 
 ### Added

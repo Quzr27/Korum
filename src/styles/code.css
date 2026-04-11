@@ -19,7 +19,8 @@
 
 .code-cell {
   padding: 0 12px 0 4px;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* ── Diff mode ── */
