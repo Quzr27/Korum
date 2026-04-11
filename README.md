@@ -7,9 +7,9 @@ Drag, resize, zoom — organize your workflow spatially instead of switching bet
 
 ![Korum workspace with terminals and notes](screenshot-1.png)
 
-![Korum with settings panel](screenshot-2.png)
+![Korum with file tree, code viewer](screenshot-2.png)
 
-> **v0.1.1-alpha** — early release. macOS only for now.
+> **v0.2.0-alpha** — early release. macOS only for now.
 
 ## Status
 
@@ -19,12 +19,13 @@ Korum is currently in early alpha. Right now, the focus is stability, persistenc
 
 - Infinite pan & zoom canvas with terminal windows
 - Markdown notes alongside terminals
+- **File tree sidebar** — per-workspace file browser with .gitignore filtering, git status badges, context menu CRUD
+- **Code viewer** — read-only file viewer with Shiki syntax highlighting (16 themes), inline diff view, minimap
 - Workspaces backed by project folders or scratch spaces
 - Session persistence (positions, sizes, and content survive restarts)
 - Built for scale — viewport-aware rendering ensures only visible terminals consume resources
 - 25 terminal themes, 5 canvas atmospheres, customizable fonts, font sizes, and zoom speed
 - Claude Code & OpenAI Codex usage limits tracking (live OAuth polling)
-- Paste protection — confirmation dialog for large pastes into terminal
 
 ## Install
 

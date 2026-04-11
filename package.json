@@ -1,7 +1,7 @@
 {
   "name": "korum",
   "private": true,
-  "version": "0.1.0-alpha",
+  "version": "0.2.0-alpha",
   "description": "Spatial terminal workspace — infinite canvas with terminals and notes",
   "author": "Quzr",
   "license": "MIT",
