@@ -21,7 +21,17 @@ pub(crate) static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct UsageBucket {
     pub utilization: f64,
-    pub resets_at: String,
+    // API may return `null` for resets_at on zero-utilization buckets.
+    pub resets_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct ExtraUsage {
+    pub is_enabled: bool,
+    pub monthly_limit: f64,
+    pub used_credits: f64,
+    pub utilization: f64,
+    pub currency: String,
 }
 
 #[derive(Serialize, Default)]
@@ -30,6 +40,8 @@ pub struct UsageResponse {
     pub seven_day: Option<UsageBucket>,
     pub seven_day_opus: Option<UsageBucket>,
     pub seven_day_sonnet: Option<UsageBucket>,
+    pub seven_day_oauth_apps: Option<UsageBucket>,
+    pub extra_usage: Option<ExtraUsage>,
     pub subscription_type: Option<String>,
     pub rate_limit_tier: Option<String>,
 }
@@ -70,6 +82,8 @@ struct ApiUsageResponse {
     seven_day: Option<UsageBucket>,
     seven_day_opus: Option<UsageBucket>,
     seven_day_sonnet: Option<UsageBucket>,
+    seven_day_oauth_apps: Option<UsageBucket>,
+    extra_usage: Option<ExtraUsage>,
 }
 
 /// Tracks where credentials came from (affects whether we can write back).
@@ -248,6 +262,8 @@ fn build_response(api: ApiUsageResponse, oauth: &OAuthCredentials) -> UsageRespo
         seven_day: api.seven_day,
         seven_day_opus: api.seven_day_opus,
         seven_day_sonnet: api.seven_day_sonnet,
+        seven_day_oauth_apps: api.seven_day_oauth_apps,
+        extra_usage: api.extra_usage,
         subscription_type: oauth.subscription_type.clone(),
         rate_limit_tier: oauth.rate_limit_tier.clone(),
     }

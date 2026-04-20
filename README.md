@@ -9,7 +9,7 @@ Drag, resize, zoom — organize your workflow spatially instead of switching bet
 
 ![Korum with file tree, code viewer](screenshot-2.png)
 
-> **v0.2.0-alpha** — early release. macOS only for now.
+> **v0.2.1-alpha** — early release. macOS only for now.
 
 ## Status
 

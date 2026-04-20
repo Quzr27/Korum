@@ -61,8 +61,43 @@ export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, ws
   const [isEditing, setIsEditing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const content = win.content ?? "";
-  const hasContent = content.length > 0;
+  // Local content state — avoids per-keystroke App re-render cascade.
+  // Synced to App state via debounced onContentChange.
+  const [localContent, setLocalContent] = useState(win.content ?? "");
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref mirror of localContent for reading in cleanup without stale closure
+  const localContentRef = useRef(localContent);
+  localContentRef.current = localContent;
+
+  // Reset local state when App state changes externally.
+  // Uses useEffect (not if-during-render) to avoid concurrent mode race conditions.
+  // App reflects localContent verbatim — no transformation — so the reset is a no-op
+  // after our own debounced sync fires (win.content === what we just sent).
+  useEffect(() => {
+    setLocalContent(win.content ?? "");
+  }, [win.content]);
+
+  // Debounced sync to App state (300ms) — prevents full-tree re-render on every keystroke
+  const syncToApp = useCallback((value: string) => {
+    if (syncTimerRef.current != null) clearTimeout(syncTimerRef.current);
+    syncTimerRef.current = setTimeout(() => {
+      onContentChange(id, value);
+    }, 300);
+  }, [id, onContentChange]);
+
+  // Flush pending sync on unmount — prevents data loss when window is culled mid-edit
+  useEffect(() => {
+    return () => {
+      if (syncTimerRef.current != null) {
+        clearTimeout(syncTimerRef.current);
+        onContentChange(id, localContentRef.current);
+      }
+    };
+    // onContentChange + id are stable (useCallback in App). localContentRef is a ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, onContentChange]);
+
+  const hasContent = localContent.length > 0;
   const accent = wsColor ?? "var(--muted-foreground)";
   const sourcePathLabel = win.sourcePath?.replace(/^\/Users\/[^/]+/, "~");
 
@@ -98,8 +133,8 @@ export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, ws
 
   // Memoize markdown rendering — avoids re-parse when unrelated windows change
   const renderedMarkdown = useMemo(
-    () => <Markdown components={SAFE_MD_COMPONENTS}>{content}</Markdown>,
-    [content],
+    () => <Markdown components={SAFE_MD_COMPONENTS}>{localContent}</Markdown>,
+    [localContent],
   );
 
   return (
@@ -195,8 +230,11 @@ export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, ws
                 className="note-editor"
                 placeholder={"Type your notes here\u2026"}
                 spellCheck={false}
-                value={content}
-                onChange={(e) => onContentChange(id, e.target.value)}
+                value={localContent}
+                onChange={(e) => {
+                  setLocalContent(e.target.value);
+                  syncToApp(e.target.value);
+                }}
                 onBlur={exitEdit}
                 onMouseDown={(e) => { handleFocus(); e.stopPropagation(); }}
                 onKeyDown={(e) => {

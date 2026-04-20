@@ -97,7 +97,15 @@ export interface PasteRequest {
 
 export interface UsageBucket {
   utilization: number;
-  resets_at: string;
+  resets_at: string | null;
+}
+
+export interface ExtraUsage {
+  is_enabled: boolean;
+  monthly_limit: number;
+  used_credits: number;
+  utilization: number;
+  currency: string;
 }
 
 export interface ClaudeUsageResponse {
@@ -105,6 +113,8 @@ export interface ClaudeUsageResponse {
   seven_day: UsageBucket | null;
   seven_day_opus: UsageBucket | null;
   seven_day_sonnet: UsageBucket | null;
+  seven_day_oauth_apps: UsageBucket | null;
+  extra_usage: ExtraUsage | null;
   subscription_type: string | null;
   rate_limit_tier: string | null;
 }

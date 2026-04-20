@@ -21,7 +21,7 @@ pub struct CodexUsageResponse {
 #[derive(Serialize, Default, Clone)]
 pub struct CodexUsageBucket {
     pub utilization: f64,
-    pub resets_at: String,
+    pub resets_at: Option<String>,
 }
 
 // ── Internal credential types ──
@@ -229,9 +229,9 @@ fn window_to_bucket(w: &ApiWindow) -> CodexUsageBucket {
             .unwrap_or(Duration::ZERO)
             .as_secs() as i64
             + reset_secs as i64;
-        format_unix_as_iso(future_secs)
+        Some(format_unix_as_iso(future_secs))
     } else {
-        String::new()
+        None
     };
 
     CodexUsageBucket {

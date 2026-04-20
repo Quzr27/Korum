@@ -4,6 +4,21 @@ All notable changes to Korum will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.1-alpha] - 2026-04-20
+
+### Fixed
+- **Usage limits card stuck on stale value** — Anthropic started returning `"resets_at": null` for zero-utilization buckets (e.g. `seven_day_sonnet`). The Rust `UsageBucket.resets_at` was non-nullable, so serde rejected the whole response → frontend silently fell back to the last cached value (the "stuck at 57%" bug). `resets_at` is now `Option<String>` in both Rust and TS; `formatTimeUntil` handles null gracefully
+- **Race on toggle off/on of usage card** — module-level `fetchInFlight` combined with a per-instance `mountedRef` could apply an in-flight fetch's result to a freshly-remounted card. Replaced with a per-effect `alive` flag (same pattern as FileTree)
+- **Orphan "Claude" section header** — when all buckets were null but `extra_usage.is_enabled === false`, the card rendered an empty Claude header. Tightened `hasClaude` to check `is_enabled === true`
+
+### Added
+- **Opus and OAuth apps rows** in the usage card (`seven_day_opus`, `seven_day_oauth_apps` buckets from the OAuth usage endpoint)
+- **Credits row** — new `extra_usage` field exposes monthly credit pool (used/limit, currency-aware symbol, utilization %)
+
+### Changed
+- `CodexUsageBucket.resets_at` is now `Option<String>` (was `String`) for consistency with the Claude side
+- Bumped usage cache key to `korum-usage-claude-v2`; pre-v2 key removed on first load
+
 ## [0.2.0-alpha] - 2026-04-11
 
 ### Added
