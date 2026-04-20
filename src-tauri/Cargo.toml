@@ -16,7 +16,7 @@ tauri-plugin-dialog = "2.6.0"
 tauri-plugin-clipboard-manager = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 ignore = "0.4"
-git2 = "0.19"
+git2 = { version = "0.19", features = ["vendored-openssl"] }
 notify-debouncer-mini = "0.5"
 
 [profile.dev]
