@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Card,
@@ -10,13 +10,17 @@ import { useSettings } from "@/lib/settings-context";
 import type {
   ClaudeUsageResponse,
   CodexUsageResponse,
+  ExtraUsage,
   UsageBucket,
 } from "@/types";
 
 const POLL_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const BACKOFF_INTERVAL = 10 * 60 * 1000; // 10 minutes after 429
-const CACHE_KEY_CLAUDE = "korum-usage-claude";
+// v2: schema changed — resets_at can be null, new buckets added. Older caches are ignored.
+const CACHE_KEY_CLAUDE = "korum-usage-claude-v2";
 const CACHE_KEY_CODEX = "korum-usage-codex";
+// One-time cleanup of the pre-v2 key so it doesn't sit orphaned in localStorage forever.
+try { localStorage.removeItem("korum-usage-claude"); } catch { /* noop */ }
 
 // Module-level state survives component remount (toggle off/on)
 let claudeBackoffUntil = 0;
@@ -50,9 +54,10 @@ function saveCache(key: string, data: unknown): void {
   } catch { /* quota exceeded — ignore */ }
 }
 
-function formatTimeUntil(isoString: string): string {
+function formatTimeUntil(isoString: string | null | undefined): string {
+  if (!isoString) return "";
   const ms = new Date(isoString).getTime() - Date.now();
-  if (!Number.isFinite(ms)) return "?";
+  if (!Number.isFinite(ms)) return "";
   if (ms <= 0) return "now";
   const hours = Math.floor(ms / 3_600_000);
   const minutes = Math.floor((ms % 3_600_000) / 60_000);
@@ -78,7 +83,9 @@ function UsageRow({
       <div className="flex items-baseline justify-between gap-2">
         <div className="flex min-w-0 items-baseline gap-1.5">
           <span className="truncate text-[11px] text-foreground/82">{label}</span>
-          <span className="truncate text-[9px] text-muted-foreground/50">{reset}</span>
+          {reset ? (
+            <span className="truncate text-[9px] text-muted-foreground/50">{reset}</span>
+          ) : null}
         </div>
         <span className="shrink-0 tabular-nums text-[10px] text-foreground/68">{pct}%</span>
       </div>
@@ -86,6 +93,40 @@ function UsageRow({
         value={Math.min(pct, 100)}
         className="h-1 bg-primary/10 dark:bg-primary/12 [&_[data-slot=progress-indicator]]:bg-primary/60 dark:[&_[data-slot=progress-indicator]]:bg-primary/45"
         aria-label={`${label} ${pct}%`}
+      />
+    </div>
+  );
+}
+
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  EUR: "€",
+  USD: "$",
+  GBP: "£",
+};
+
+function formatCredits(value: number, currency: string): string {
+  const symbol = CURRENCY_SYMBOLS[currency] ?? currency;
+  return `${symbol}${value.toFixed(0)}`;
+}
+
+function ExtraUsageRow({ extra }: { extra: ExtraUsage }) {
+  const pct = Math.round(extra.utilization);
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="flex min-w-0 items-baseline gap-1.5">
+          <span className="truncate text-[11px] text-foreground/82">Credits</span>
+          <span className="truncate text-[9px] text-muted-foreground/50">
+            {formatCredits(extra.used_credits, extra.currency)}
+            /{formatCredits(extra.monthly_limit, extra.currency)}
+          </span>
+        </div>
+        <span className="shrink-0 tabular-nums text-[10px] text-foreground/68">{pct}%</span>
+      </div>
+      <Progress
+        value={Math.min(pct, 100)}
+        className="h-1 bg-primary/10 dark:bg-primary/12 [&_[data-slot=progress-indicator]]:bg-primary/60 dark:[&_[data-slot=progress-indicator]]:bg-primary/45"
+        aria-label={`Credits ${pct}%`}
       />
     </div>
   );
@@ -111,59 +152,67 @@ export default function UsageLimitsCard() {
   const [codex, setCodex] = useState<CodexUsageResponse | null>(
     () => loadCached<CodexUsageResponse>(CACHE_KEY_CODEX)?.data ?? null,
   );
-  const mountedRef = useRef(false);
-
-  const fetchAll = useCallback(async () => {
-    if (fetchInFlight) return;
-    fetchInFlight = true;
-    try {
-      const now = Date.now();
-
-      // Claude: skip if cache fresh OR in backoff window
-      const skipClaude = isCacheFresh(CACHE_KEY_CLAUDE) || now < claudeBackoffUntil;
-      const claudePromise = skipClaude
-        ? Promise.resolve(null)
-        : invoke<ClaudeUsageResponse>("fetch_claude_usage").catch((err: unknown) => {
-            if (isRateLimited(err)) {
-              claudeBackoffUntil = Date.now() + BACKOFF_INTERVAL;
-            }
-            return null;
-          });
-
-      // Codex: skip if cache fresh
-      const codexPromise = isCacheFresh(CACHE_KEY_CODEX)
-        ? Promise.resolve(null)
-        : invoke<CodexUsageResponse>("fetch_codex_usage").catch(() => null);
-
-      const [claudeResult, codexResult] = await Promise.all([claudePromise, codexPromise]);
-      if (!mountedRef.current) return;
-
-      if (claudeResult) {
-        setClaude(claudeResult);
-        saveCache(CACHE_KEY_CLAUDE, claudeResult);
-      }
-      if (codexResult) {
-        setCodex(codexResult);
-        saveCache(CACHE_KEY_CODEX, codexResult);
-      }
-    } finally {
-      fetchInFlight = false;
-    }
-  }, []);
 
   useEffect(() => {
     if (!settings.showUsageLimits) return;
-    mountedRef.current = true;
+    // Per-effect `alive` flag — survives rapid toggle without the cross-instance
+    // races that a useRef mountedRef would have under module-level fetchInFlight.
+    let alive = true;
+
+    const fetchAll = async () => {
+      if (fetchInFlight) return;
+      fetchInFlight = true;
+      try {
+        const now = Date.now();
+
+        // Claude: skip if cache fresh OR in backoff window
+        const skipClaude = isCacheFresh(CACHE_KEY_CLAUDE) || now < claudeBackoffUntil;
+        const claudePromise = skipClaude
+          ? Promise.resolve(null)
+          : invoke<ClaudeUsageResponse>("fetch_claude_usage").catch((err: unknown) => {
+              if (isRateLimited(err)) {
+                claudeBackoffUntil = Date.now() + BACKOFF_INTERVAL;
+              }
+              return null;
+            });
+
+        // Codex: skip if cache fresh
+        const codexPromise = isCacheFresh(CACHE_KEY_CODEX)
+          ? Promise.resolve(null)
+          : invoke<CodexUsageResponse>("fetch_codex_usage").catch(() => null);
+
+        const [claudeResult, codexResult] = await Promise.all([claudePromise, codexPromise]);
+        if (!alive) return;
+
+        if (claudeResult) {
+          setClaude(claudeResult);
+          saveCache(CACHE_KEY_CLAUDE, claudeResult);
+        }
+        if (codexResult) {
+          setCodex(codexResult);
+          saveCache(CACHE_KEY_CODEX, codexResult);
+        }
+      } finally {
+        fetchInFlight = false;
+      }
+    };
 
     void fetchAll();
     const id = setInterval(() => void fetchAll(), POLL_INTERVAL);
     return () => {
-      mountedRef.current = false;
+      alive = false;
       clearInterval(id);
     };
-  }, [settings.showUsageLimits, fetchAll]);
+  }, [settings.showUsageLimits]);
 
-  const hasClaude = claude && (claude.five_hour ?? claude.seven_day);
+  const hasClaude =
+    claude !== null &&
+    (claude.five_hour !== null ||
+      claude.seven_day !== null ||
+      claude.seven_day_opus !== null ||
+      claude.seven_day_sonnet !== null ||
+      claude.seven_day_oauth_apps !== null ||
+      claude.extra_usage?.is_enabled === true);
   const hasCodex = codex && (codex.primary_window ?? codex.secondary_window);
 
   if (!settings.showUsageLimits || (!hasClaude && !hasCodex)) return null;
@@ -185,8 +234,17 @@ export default function UsageLimitsCard() {
             {claude.seven_day ? (
               <UsageRow label="Weekly" bucket={claude.seven_day} />
             ) : null}
+            {claude.seven_day_opus ? (
+              <UsageRow label="Opus" bucket={claude.seven_day_opus} />
+            ) : null}
             {claude.seven_day_sonnet ? (
               <UsageRow label="Sonnet" bucket={claude.seven_day_sonnet} />
+            ) : null}
+            {claude.seven_day_oauth_apps ? (
+              <UsageRow label="OAuth apps" bucket={claude.seven_day_oauth_apps} />
+            ) : null}
+            {claude.extra_usage?.is_enabled ? (
+              <ExtraUsageRow extra={claude.extra_usage} />
             ) : null}
           </div>
         ) : null}

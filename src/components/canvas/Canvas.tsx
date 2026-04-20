@@ -50,7 +50,7 @@ interface CanvasProps {
   onViewModeChange: (id: string, mode: CodeViewMode) => void;
 }
 
-export default function Canvas({
+export default memo(function Canvas({
   windows,
   workspaces,
   activeWorkspaceId,
@@ -94,17 +94,19 @@ export default function Canvas({
   const zoomRef = useRef(zoom);
   const motionRef = useRef(false);
   const liveTerminalKeepAliveRef = useRef<Record<string, number>>({});
-  // Only mount terminals near the viewport — off-viewport terminals stay unmounted
-  // (PTYs survive in Rust). Notes are lightweight, always mounted.
+  // Only mount windows near the viewport — off-viewport windows stay unmounted.
+  // PTYs survive in Rust; code/note content re-loads on remount.
+  // Active window is always rendered (user might be editing).
   const renderedWindows = useMemo(() => {
     const rect = viewportRef.current?.getBoundingClientRect();
     const vpW = rect?.width ?? window.innerWidth;
     const vpH = rect?.height ?? window.innerHeight;
     return visibleWindows.filter((w) => {
-      if (w.type !== "terminal") return true;
-      return isWindowInViewport(w, pan, zoom, vpW, vpH, 600);
+      if (w.id === activeWindowId) return true;
+      const buffer = w.type === "terminal" ? 600 : 800;
+      return isWindowInViewport(w, pan, zoom, vpW, vpH, buffer);
     });
-  }, [visibleWindows, pan, zoom]);
+  }, [visibleWindows, pan, zoom, activeWindowId]);
 
   // Sync refs from React state (except during active motion)
   if (!motionRef.current) {
@@ -436,7 +438,7 @@ export default function Canvas({
       />
     </>
   );
-}
+});
 
 // ── Minimap ──
 
