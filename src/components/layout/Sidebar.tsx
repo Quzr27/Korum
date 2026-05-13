@@ -536,7 +536,6 @@ export default function Sidebar({
       ),
     [windows, activeWorkspaceId],
   );
-
   useEffect(() => {
     writeSidebarUiState({ fileDrawerOpenByWorkspaceId, fileQueryByWorkspaceId, showIgnoredByWorkspaceId });
   }, [fileDrawerOpenByWorkspaceId, fileQueryByWorkspaceId, showIgnoredByWorkspaceId]);
@@ -601,6 +600,14 @@ export default function Sidebar({
     setFileDrawerOpenByWorkspaceId((prev) => ({ ...prev, [activeWs.id]: !prev[activeWs.id] }));
   }, [activeWs]);
 
+  const closeDrawer = useCallback(() => {
+    if (!activeWs) return;
+    setFileDrawerOpenByWorkspaceId((prev) => ({ ...prev, [activeWs.id]: false }));
+  }, [activeWs]);
+
+  const activeRootPath = activeWs?.rootPath;
+  const fileDrawerVisible = Boolean(activeRootPath && filePanelOpen);
+
   const updateActiveFileQuery = useCallback((value: string) => {
     if (!activeWs) return;
     setFileQueryByWorkspaceId((prev) => {
@@ -633,7 +640,7 @@ export default function Sidebar({
     <>
       <aside className={cn(
         "glass fixed left-3 top-3 bottom-3 z-40 w-72 flex flex-col shadow-2xl shadow-black/25 overflow-hidden",
-        filePanelOpen && activeWs?.rootPath ? "rounded-l-xl rounded-r-none border-r-0" : "rounded-xl",
+        fileDrawerVisible ? "rounded-l-xl rounded-r-none border-r-0" : "rounded-xl",
       )}>
         {/* Header */}
         <div className="px-3 pt-3 pb-1.5">
@@ -905,14 +912,14 @@ export default function Sidebar({
       </aside>
 
       {/* File tree drawer — docked to sidebar right edge */}
-      {activeWs?.rootPath && (
+      {fileDrawerVisible && activeWs && activeRootPath && (
         <aside
-          data-state={filePanelOpen ? "open" : "closed"}
+          data-state="open"
           className={cn(
-            "sidebar-file-drawer glass-subtle fixed top-3 bottom-3 left-[calc(0.75rem+18rem)] z-39 w-60 rounded-r-xl flex flex-col overflow-hidden text-foreground",
+            "sidebar-file-drawer glass-subtle fixed top-3 bottom-3 left-[calc(0.75rem+18rem)] z-39 rounded-r-xl flex flex-col overflow-hidden text-foreground",
             "border-y border-r border-border/30",
             "shadow-xl shadow-black/15",
-            filePanelOpen ? "pointer-events-auto" : "pointer-events-none",
+            "w-60",
           )}
         >
           <div className="sidebar-file-drawer__inner flex h-full flex-col">
@@ -930,10 +937,10 @@ export default function Sidebar({
                     </p>
                     <p
                       className="truncate text-[10px] text-muted-foreground/42"
-                      title={activeWs.rootPath}
+                      title={activeRootPath}
                       translate="no"
                     >
-                      {activeWs.rootPath.replace(/^\/Users\/[^/]+/, "~")}
+                      {activeRootPath.replace(/^\/Users\/[^/]+/, "~")}
                     </p>
                   </div>
                 </div>
@@ -942,8 +949,8 @@ export default function Sidebar({
                   variant="ghost"
                   size="icon-xs"
                   className="text-muted-foreground/30 hover:text-muted-foreground shrink-0"
-                  onClick={toggleFilePanel}
-                  aria-label="Close file drawer"
+                  onClick={closeDrawer}
+                  aria-label="Close workspace drawer"
                 >
                   <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true">
                     <path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
@@ -973,7 +980,7 @@ export default function Sidebar({
                           ? "text-muted-foreground"
                           : "text-muted-foreground/30 hover:text-muted-foreground",
                       )}
-                      onClick={() => { if (activeWs) setShowIgnoredByWorkspaceId((prev) => ({ ...prev, [activeWs.id]: !prev[activeWs.id] })); }}
+                      onClick={() => setShowIgnoredByWorkspaceId((prev) => ({ ...prev, [activeWs.id]: !prev[activeWs.id] }))}
                       aria-label={showIgnored ? "Hide ignored files" : "Show ignored files"}
                       aria-pressed={showIgnored}
                     >
@@ -987,21 +994,19 @@ export default function Sidebar({
               </div>
             </div>
 
-            {filePanelOpen && (
-              <ScrollArea className="flex-1 min-h-0">
-                <div className="px-0.5 py-1">
-                  <FileTree
-                    rootPath={activeWs.rootPath}
-                    query={activeWorkspaceFileQuery}
-                    wsColor={WORKSPACE_COLORS[activeWs.color]}
-                    showIgnored={showIgnored}
-                    activeFilePath={activeFilePath}
-                    openFilePaths={openFilePaths}
-                    onOpenFile={(filePath) => onOpenFile(filePath, activeWs.id)}
-                  />
-                </div>
-              </ScrollArea>
-            )}
+            <ScrollArea className="flex-1 min-h-0">
+              <div className="px-0.5 py-1">
+                <FileTree
+                  rootPath={activeRootPath}
+                  query={activeWorkspaceFileQuery}
+                  wsColor={WORKSPACE_COLORS[activeWs.color]}
+                  showIgnored={showIgnored}
+                  activeFilePath={activeFilePath}
+                  openFilePaths={openFilePaths}
+                  onOpenFile={(filePath) => onOpenFile(filePath, activeWs.id)}
+                />
+              </div>
+            </ScrollArea>
           </div>
         </aside>
       )}

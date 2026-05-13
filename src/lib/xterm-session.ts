@@ -27,10 +27,45 @@ import { useVisibility } from "@/lib/visibility-context";
 import type { PasteRequest } from "@/types";
 
 const SNAPSHOT_SCROLLBACK_ROWS = 120;
+const LIVE_WRITE_REPAIR_IDLE_DELAY_MS = 180;
+const LIVE_WRITE_REPAIR_MAX_DELAY_MS = 1000;
 
 function writeTerminalSnapshot(term: Terminal, snapshot: string): Promise<void> {
   return new Promise((resolve) => {
     term.write(snapshot, () => resolve());
+  });
+}
+
+function refreshTerminalDisplay(
+  term: Terminal,
+  options: {
+    isCurrent: () => boolean;
+    clearSelection?: boolean;
+    onComplete?: () => void;
+  },
+): number {
+  if (options.clearSelection) term.clearSelection();
+
+  const buf = term.buffer.active;
+  const wasAtBottom = buf.viewportY >= buf.baseY;
+  const savedViewportY = buf.viewportY;
+  term.clearTextureAtlas();
+
+  return requestAnimationFrame(() => {
+    try {
+      if (!options.isCurrent()) return;
+
+      term.refresh(0, term.rows - 1);
+      // Restore: if user was scrolled to bottom, stay there (baseY may have
+      // changed from new data); otherwise restore exact viewport position.
+      if (wasAtBottom) {
+        term.scrollToBottom();
+      } else if (buf.viewportY !== savedViewportY) {
+        term.scrollLines(savedViewportY - buf.viewportY);
+      }
+    } finally {
+      options.onComplete?.();
+    }
   });
 }
 
@@ -129,13 +164,52 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     let alive = true;
     let attached = false;
     let hasLiveData = false;
+    let liveWriteRepairTimer: number | null = null;
+    let liveWriteRepairMaxTimer: number | null = null;
+    let liveWriteRepairRaf: number | null = null;
+    const clearLiveWriteRepairTimers = () => {
+      if (liveWriteRepairTimer !== null) {
+        window.clearTimeout(liveWriteRepairTimer);
+        liveWriteRepairTimer = null;
+      }
+      if (liveWriteRepairMaxTimer !== null) {
+        window.clearTimeout(liveWriteRepairMaxTimer);
+        liveWriteRepairMaxTimer = null;
+      }
+    };
+    const runLiveWriteRepair = () => {
+      clearLiveWriteRepairTimers();
+      if (!alive || liveWriteRepairRaf !== null) return;
+
+      liveWriteRepairRaf = refreshTerminalDisplay(term, {
+        isCurrent: () => alive && termInstanceRef.current === term,
+        onComplete: () => {
+          liveWriteRepairRaf = null;
+        },
+      });
+    };
+    const scheduleLiveWriteRepair = () => {
+      if (!alive) return;
+
+      if (liveWriteRepairTimer !== null) {
+        window.clearTimeout(liveWriteRepairTimer);
+      }
+      liveWriteRepairTimer = window.setTimeout(runLiveWriteRepair, LIVE_WRITE_REPAIR_IDLE_DELAY_MS);
+
+      if (liveWriteRepairMaxTimer === null) {
+        liveWriteRepairMaxTimer = window.setTimeout(
+          runLiveWriteRepair,
+          LIVE_WRITE_REPAIR_MAX_DELAY_MS,
+        );
+      }
+    };
     // Capture snapshot at mount time — never read reactively
     const snapshotAtMount = terminalSnapshot;
     const channel = new Channel<number[]>();
     channel.onmessage = (data: number[]) => {
       if (!alive) return;
       hasLiveData = true;
-      term.write(new Uint8Array(data));
+      term.write(new Uint8Array(data), scheduleLiveWriteRepair);
     };
     const onDataDisposable = term.onData((data: string) => {
       if (ptyIdRef.current) {
@@ -206,25 +280,11 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     container.addEventListener("mousemove", handleMouseZoom, true);
     container.addEventListener("mouseup", handleMouseZoom, true);
 
-    // Visibility refresh (via VisibilityProvider — single global listener)
-    // Preserve scroll position across atlas clear + refresh to prevent
-    // scroll-to-top on focus return while PTY is actively writing data.
+    // Visibility refresh (via VisibilityProvider — single global listener).
     registerVisibility(id, () => {
-      term.clearSelection();
-      const buf = term.buffer.active;
-      const wasAtBottom = buf.viewportY >= buf.baseY;
-      const savedViewportY = buf.viewportY;
-      term.clearTextureAtlas();
-      requestAnimationFrame(() => {
-        if (termInstanceRef.current !== term) return;
-        term.refresh(0, term.rows - 1);
-        // Restore: if user was scrolled to bottom, stay there (baseY may have
-        // changed from new data); otherwise restore exact viewport position.
-        if (wasAtBottom) {
-          term.scrollToBottom();
-        } else if (buf.viewportY !== savedViewportY) {
-          term.scrollLines(savedViewportY - buf.viewportY);
-        }
+      refreshTerminalDisplay(term, {
+        clearSelection: true,
+        isCurrent: () => termInstanceRef.current === term,
       });
     });
 
@@ -244,6 +304,11 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
       container.removeEventListener("mousemove", handleMouseZoom, true);
       container.removeEventListener("mouseup", handleMouseZoom, true);
       unregisterVisibility(id);
+      clearLiveWriteRepairTimers();
+      if (liveWriteRepairRaf !== null) {
+        cancelAnimationFrame(liveWriteRepairRaf);
+        liveWriteRepairRaf = null;
+      }
       termInstanceRef.current = null;
       fitAddonRef.current = null;
       setIsSessionReady(false);

@@ -72,10 +72,9 @@ enum UsageError {
 // ── Public API ──
 
 pub async fn fetch_usage() -> Result<CodexUsageResponse, String> {
-    let (auth_path, raw, tokens) =
-        tauri::async_runtime::spawn_blocking(read_credentials)
-            .await
-            .map_err(|e| format!("Credential read task failed: {e}"))??;
+    let (auth_path, raw, tokens) = tauri::async_runtime::spawn_blocking(read_credentials)
+        .await
+        .map_err(|e| format!("Credential read task failed: {e}"))??;
 
     match request_usage(&tokens.access_token, &tokens.account_id).await {
         Ok(api) => Ok(build_response(api)),
@@ -97,8 +96,8 @@ pub async fn fetch_usage() -> Result<CodexUsageResponse, String> {
 
 fn read_credentials() -> Result<(PathBuf, String, AuthTokens), String> {
     let auth_path = auth_path()?;
-    let raw = fs::read_to_string(&auth_path)
-        .map_err(|_| "Codex credentials not found".to_string())?;
+    let raw =
+        fs::read_to_string(&auth_path).map_err(|_| "Codex credentials not found".to_string())?;
     let auth: AuthFile =
         serde_json::from_str(&raw).map_err(|e| format!("Invalid Codex auth JSON: {e}"))?;
     let tokens = auth.tokens.ok_or("No tokens in Codex auth")?;
@@ -121,9 +120,7 @@ async fn request_usage(
     token: &str,
     account_id: &Option<String>,
 ) -> Result<ApiUsageResponse, UsageError> {
-    let mut req = HTTP_CLIENT
-        .get(USAGE_URL)
-        .bearer_auth(token);
+    let mut req = HTTP_CLIENT.get(USAGE_URL).bearer_auth(token);
 
     if let Some(id) = account_id {
         req = req.header("ChatGPT-Account-ID", id);
@@ -222,7 +219,11 @@ fn build_response(api: ApiUsageResponse) -> CodexUsageResponse {
 
 fn window_to_bucket(w: &ApiWindow) -> CodexUsageBucket {
     let raw = w.reset_after_seconds.unwrap_or(0.0);
-    let reset_secs = if raw.is_finite() { raw.clamp(0.0, 86400.0 * 365.0 * 10.0) } else { 0.0 };
+    let reset_secs = if raw.is_finite() {
+        raw.clamp(0.0, 86400.0 * 365.0 * 10.0)
+    } else {
+        0.0
+    };
     let reset_at = if reset_secs > 0.0 {
         let future_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -253,14 +254,35 @@ fn format_unix_as_iso(secs: i64) -> String {
     let mut y = 1970i64;
     let mut remaining = days_since_epoch;
     loop {
-        if y > 9999 { return String::new(); }
-        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
-        if remaining < days_in_year { break; }
+        if y > 9999 {
+            return String::new();
+        }
+        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if remaining < days_in_year {
+            break;
+        }
         remaining -= days_in_year;
         y += 1;
     }
     let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-    let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut m = 0usize;
     while m < 12 && remaining >= month_days[m] {
         remaining -= month_days[m];

@@ -70,8 +70,8 @@ const ALWAYS_EXCLUDE: &[&str] = &[".git", ".DS_Store", "Thumbs.db"];
 /// Canonicalize `path` and verify it lives under `root`. Prevents path traversal.
 /// Falls back to lexical prefix check for dangling symlinks (canonicalize fails on NotFound).
 fn confine_path(path: &str, root: &str) -> Result<PathBuf, String> {
-    let canonical_root = std::fs::canonicalize(root)
-        .map_err(|e| format!("Cannot resolve root path: {e}"))?;
+    let canonical_root =
+        std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve root path: {e}"))?;
 
     match std::fs::canonicalize(path) {
         Ok(canonical_path) => {
@@ -90,8 +90,8 @@ fn confine_path(path: &str, root: &str) -> Result<PathBuf, String> {
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
                 .ok_or_else(|| format!("Cannot resolve path: {e}"))?;
-            let canonical_parent = std::fs::canonicalize(parent)
-                .map_err(|e2| format!("Cannot resolve path: {e2}"))?;
+            let canonical_parent =
+                std::fs::canonicalize(parent).map_err(|e2| format!("Cannot resolve path: {e2}"))?;
             if !canonical_parent.starts_with(&canonical_root) {
                 return Err(format!(
                     "Path escapes workspace root: {}",
@@ -115,10 +115,10 @@ fn confine_new_path(path: &str, root: &str) -> Result<PathBuf, String> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| "Cannot determine parent directory — path must be absolute".to_string())?;
-    let canonical_root = std::fs::canonicalize(root)
-        .map_err(|e| format!("Cannot resolve root path: {e}"))?;
-    let canonical_parent = std::fs::canonicalize(parent)
-        .map_err(|e| format!("Cannot resolve parent path: {e}"))?;
+    let canonical_root =
+        std::fs::canonicalize(root).map_err(|e| format!("Cannot resolve root path: {e}"))?;
+    let canonical_parent =
+        std::fs::canonicalize(parent).map_err(|e| format!("Cannot resolve parent path: {e}"))?;
 
     if !canonical_parent.starts_with(&canonical_root) {
         return Err(format!(
@@ -178,9 +178,10 @@ pub fn read_directory(path: &str, show_ignored: bool) -> Result<Vec<FileEntry>, 
         };
 
         // Check gitignore
-        let is_ignored = gitignore
-            .as_ref()
-            .is_some_and(|gi| gi.matched_path_or_any_parents(&entry_path, is_dir).is_ignore());
+        let is_ignored = gitignore.as_ref().is_some_and(|gi| {
+            gi.matched_path_or_any_parents(&entry_path, is_dir)
+                .is_ignore()
+        });
 
         if is_ignored && !show_ignored {
             continue;
@@ -451,8 +452,8 @@ pub fn get_file_diff(path: &str, root: &str) -> Result<Vec<DiffLine>, String> {
         .workdir()
         .ok_or_else(|| "Bare repository".to_string())?;
 
-    let repo_root_canonical = std::fs::canonicalize(repo_root)
-        .unwrap_or_else(|_| repo_root.to_path_buf());
+    let repo_root_canonical =
+        std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
 
     let relative = confined
         .strip_prefix(&repo_root_canonical)
@@ -474,18 +475,16 @@ pub fn get_file_diff(path: &str, root: &str) -> Result<Vec<DiffLine>, String> {
 
     // For untracked files, return all lines as "add" (with size/binary guards)
     if is_untracked {
-        let meta = std::fs::metadata(&confined)
-            .map_err(|e| format!("Failed to read metadata: {e}"))?;
+        let meta =
+            std::fs::metadata(&confined).map_err(|e| format!("Failed to read metadata: {e}"))?;
         if meta.len() > MAX_CODE_FILE_SIZE {
             return Err(format!("File too large for diff ({} bytes)", meta.len()));
         }
-        let raw = std::fs::read(&confined)
-            .map_err(|e| format!("Failed to read file: {e}"))?;
+        let raw = std::fs::read(&confined).map_err(|e| format!("Failed to read file: {e}"))?;
         if raw.iter().take(8192).any(|&b| b == 0) {
             return Err("Binary file".to_string());
         }
-        let content = String::from_utf8(raw)
-            .map_err(|_| "Non-UTF-8 file".to_string())?;
+        let content = String::from_utf8(raw).map_err(|_| "Non-UTF-8 file".to_string())?;
         return Ok(content
             .lines()
             .enumerate()
@@ -569,14 +568,12 @@ pub fn delete_path(path: &str, root: &str) -> Result<(), String> {
     let confined = confine_path(path, root)?;
 
     // Use symlink_metadata — don't follow symlinks into directories outside workspace
-    let meta = std::fs::symlink_metadata(&confined)
-        .map_err(|e| format!("Failed to stat: {e}"))?;
+    let meta = std::fs::symlink_metadata(&confined).map_err(|e| format!("Failed to stat: {e}"))?;
 
     if meta.is_symlink() || meta.is_file() {
         std::fs::remove_file(&confined).map_err(|e| format!("Failed to delete: {e}"))
     } else {
-        std::fs::remove_dir_all(&confined)
-            .map_err(|e| format!("Failed to delete directory: {e}"))
+        std::fs::remove_dir_all(&confined).map_err(|e| format!("Failed to delete directory: {e}"))
     }
 }
 
@@ -680,8 +677,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .subsec_nanos();
-        let dir = std::env::temp_dir()
-            .join(format!("korum_test_{}_{}", prefix, nanos));
+        let dir = std::env::temp_dir().join(format!("korum_test_{}_{}", prefix, nanos));
         fs::create_dir_all(&dir).expect("failed to create temp dir");
         dir
     }
@@ -695,10 +691,7 @@ mod tests {
         let file = root.join("hello.txt");
         fs::write(&file, b"").expect("write");
 
-        let result = confine_path(
-            &file.to_string_lossy(),
-            &root.to_string_lossy(),
-        );
+        let result = confine_path(&file.to_string_lossy(), &root.to_string_lossy());
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
         let resolved = result.unwrap();
         // The resolved path must still live under root.
@@ -718,10 +711,7 @@ mod tests {
         // After canonicalization this lands outside root.
         let escape = root.join("..").join("..").join("etc").join("passwd");
 
-        let result = confine_path(
-            &escape.to_string_lossy(),
-            &root.to_string_lossy(),
-        );
+        let result = confine_path(&escape.to_string_lossy(), &root.to_string_lossy());
         // Should either be Err (path resolved outside root) or, on systems
         // where /etc/passwd doesn't exist, still Err via the dangling-symlink
         // branch (parent ".." won't start with root).
@@ -735,11 +725,12 @@ mod tests {
     fn confine_path_exact_root() {
         let root = make_temp_dir("cp_root");
 
-        let result = confine_path(
-            &root.to_string_lossy(),
-            &root.to_string_lossy(),
+        let result = confine_path(&root.to_string_lossy(), &root.to_string_lossy());
+        assert!(
+            result.is_ok(),
+            "expected Ok for root itself, got {:?}",
+            result
         );
-        assert!(result.is_ok(), "expected Ok for root itself, got {:?}", result);
 
         fs::remove_dir_all(&root).ok();
     }
@@ -753,11 +744,12 @@ mod tests {
         let file = sub.join("deep.rs");
         fs::write(&file, b"").expect("write");
 
-        let result = confine_path(
-            &file.to_string_lossy(),
-            &root.to_string_lossy(),
+        let result = confine_path(&file.to_string_lossy(), &root.to_string_lossy());
+        assert!(
+            result.is_ok(),
+            "expected Ok for nested file, got {:?}",
+            result
         );
-        assert!(result.is_ok(), "expected Ok for nested file, got {:?}", result);
 
         fs::remove_dir_all(&root).ok();
     }
@@ -771,10 +763,7 @@ mod tests {
         // Make sure it really does not exist.
         assert!(!ghost.exists());
 
-        let result = confine_path(
-            &ghost.to_string_lossy(),
-            &root.to_string_lossy(),
-        );
+        let result = confine_path(&ghost.to_string_lossy(), &root.to_string_lossy());
         assert!(
             result.is_ok(),
             "expected Ok via dangling-symlink fallback, got {:?}",
@@ -796,10 +785,7 @@ mod tests {
         // The parent directory does not exist either.
         let deep_ghost = root.join("no_such_dir").join("also_missing.txt");
 
-        let result = confine_path(
-            &deep_ghost.to_string_lossy(),
-            &root.to_string_lossy(),
-        );
+        let result = confine_path(&deep_ghost.to_string_lossy(), &root.to_string_lossy());
         assert!(
             result.is_err(),
             "expected Err when parent also missing, got Ok"
@@ -816,10 +802,7 @@ mod tests {
         let root = make_temp_dir("cnp_root");
 
         let new_file = root.join("newfile.txt");
-        let result = confine_new_path(
-            &new_file.to_string_lossy(),
-            &root.to_string_lossy(),
-        );
+        let result = confine_new_path(&new_file.to_string_lossy(), &root.to_string_lossy());
         assert!(result.is_ok(), "expected Ok, got {:?}", result);
 
         fs::remove_dir_all(&root).ok();
@@ -833,11 +816,12 @@ mod tests {
         fs::create_dir_all(&sub).expect("create subdir");
 
         let new_file = sub.join("new.rs");
-        let result = confine_new_path(
-            &new_file.to_string_lossy(),
-            &root.to_string_lossy(),
+        let result = confine_new_path(&new_file.to_string_lossy(), &root.to_string_lossy());
+        assert!(
+            result.is_ok(),
+            "expected Ok for new file in subdir, got {:?}",
+            result
         );
-        assert!(result.is_ok(), "expected Ok for new file in subdir, got {:?}", result);
 
         fs::remove_dir_all(&root).ok();
     }
@@ -857,10 +841,7 @@ mod tests {
         fs::create_dir_all(&sibling).expect("create sibling");
 
         let escape = sibling.join("malicious.sh");
-        let result = confine_new_path(
-            &escape.to_string_lossy(),
-            &root.to_string_lossy(),
-        );
+        let result = confine_new_path(&escape.to_string_lossy(), &root.to_string_lossy());
         assert!(
             result.is_err(),
             "expected Err for path escaping root, got Ok"
@@ -876,14 +857,8 @@ mod tests {
         let root = make_temp_dir("cnp_bare");
 
         // "just_a_name.txt" has no parent dir component — parent() returns ""
-        let result = confine_new_path(
-            "just_a_name.txt",
-            &root.to_string_lossy(),
-        );
-        assert!(
-            result.is_err(),
-            "expected Err for bare filename, got Ok"
-        );
+        let result = confine_new_path("just_a_name.txt", &root.to_string_lossy());
+        assert!(result.is_err(), "expected Err for bare filename, got Ok");
 
         fs::remove_dir_all(&root).ok();
     }
@@ -898,8 +873,8 @@ mod tests {
         fs::write(root.join("file_b.rs"), b"").expect("write b");
         fs::create_dir(root.join("subdir")).expect("mkdir");
 
-        let entries = read_directory(&root.to_string_lossy(), false)
-            .expect("read_directory failed");
+        let entries =
+            read_directory(&root.to_string_lossy(), false).expect("read_directory failed");
 
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"file_a.txt"), "file_a.txt missing");
@@ -916,8 +891,8 @@ mod tests {
         fs::write(root.join("aaa.txt"), b"").expect("write file");
         fs::create_dir(root.join("zzz_dir")).expect("mkdir");
 
-        let entries = read_directory(&root.to_string_lossy(), false)
-            .expect("read_directory failed");
+        let entries =
+            read_directory(&root.to_string_lossy(), false).expect("read_directory failed");
 
         assert!(!entries.is_empty());
         assert!(entries[0].is_dir, "first entry should be a directory");
@@ -934,13 +909,19 @@ mod tests {
         fs::write(root.join("Thumbs.db"), b"").expect("write Thumbs.db");
         fs::write(root.join("visible.txt"), b"").expect("write visible");
 
-        let entries = read_directory(&root.to_string_lossy(), false)
-            .expect("read_directory failed");
+        let entries =
+            read_directory(&root.to_string_lossy(), false).expect("read_directory failed");
 
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(!names.contains(&".git"), ".git should be excluded");
-        assert!(!names.contains(&".DS_Store"), ".DS_Store should be excluded");
-        assert!(!names.contains(&"Thumbs.db"), "Thumbs.db should be excluded");
+        assert!(
+            !names.contains(&".DS_Store"),
+            ".DS_Store should be excluded"
+        );
+        assert!(
+            !names.contains(&"Thumbs.db"),
+            "Thumbs.db should be excluded"
+        );
         assert!(names.contains(&"visible.txt"), "visible.txt should appear");
 
         fs::remove_dir_all(&root).ok();
@@ -952,8 +933,8 @@ mod tests {
         let root = make_temp_dir("rd_no_gi");
         fs::write(root.join("normal.txt"), b"").expect("write");
 
-        let entries = read_directory(&root.to_string_lossy(), false)
-            .expect("read_directory failed");
+        let entries =
+            read_directory(&root.to_string_lossy(), false).expect("read_directory failed");
 
         for entry in &entries {
             assert!(
@@ -983,13 +964,19 @@ mod tests {
         fs::create_dir(root.join("build")).expect("mkdir build");
         fs::write(root.join("build").join("out.js"), b"").expect("write out.js");
 
-        let entries = read_directory(&root.to_string_lossy(), false)
-            .expect("read_directory failed");
+        let entries =
+            read_directory(&root.to_string_lossy(), false).expect("read_directory failed");
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
         assert!(names.contains(&"app.rs"), "app.rs should appear");
-        assert!(!names.contains(&"debug.log"), "debug.log should be filtered by *.log");
-        assert!(!names.contains(&"build"), "build/ should be filtered by build/");
+        assert!(
+            !names.contains(&"debug.log"),
+            "debug.log should be filtered by *.log"
+        );
+        assert!(
+            !names.contains(&"build"),
+            "build/ should be filtered by build/"
+        );
 
         fs::remove_dir_all(&root).ok();
     }
@@ -1001,15 +988,20 @@ mod tests {
         fs::write(root.join("app.rs"), b"").expect("write app.rs");
         fs::write(root.join("debug.log"), b"").expect("write debug.log");
 
-        let entries = read_directory(&root.to_string_lossy(), true)
-            .expect("read_directory failed");
+        let entries = read_directory(&root.to_string_lossy(), true).expect("read_directory failed");
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
         assert!(names.contains(&"app.rs"), "app.rs should appear");
-        assert!(names.contains(&"debug.log"), "debug.log should appear with show_ignored=true");
+        assert!(
+            names.contains(&"debug.log"),
+            "debug.log should appear with show_ignored=true"
+        );
 
         let log_entry = entries.iter().find(|e| e.name == "debug.log").unwrap();
-        assert!(log_entry.is_ignored, "debug.log should have is_ignored=true");
+        assert!(
+            log_entry.is_ignored,
+            "debug.log should have is_ignored=true"
+        );
 
         let rs_entry = entries.iter().find(|e| e.name == "app.rs").unwrap();
         assert!(!rs_entry.is_ignored, "app.rs should have is_ignored=false");
@@ -1024,12 +1016,15 @@ mod tests {
         fs::create_dir(root.join("node_modules")).expect("mkdir node_modules");
         fs::create_dir(root.join("src")).expect("mkdir src");
 
-        let entries = read_directory(&root.to_string_lossy(), false)
-            .expect("read_directory failed");
+        let entries =
+            read_directory(&root.to_string_lossy(), false).expect("read_directory failed");
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
         assert!(names.contains(&"src"), "src should appear");
-        assert!(!names.contains(&"node_modules"), "node_modules/ should be filtered");
+        assert!(
+            !names.contains(&"node_modules"),
+            "node_modules/ should be filtered"
+        );
 
         fs::remove_dir_all(&root).ok();
     }

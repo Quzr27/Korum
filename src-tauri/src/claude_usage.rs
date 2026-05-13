@@ -122,15 +122,12 @@ pub async fn fetch_usage() -> Result<UsageResponse, String> {
         Ok(api) => Ok(build_response(api, &oauth)),
         Err(UsageError::RateLimited) => Err("RATE_LIMITED".to_string()),
         Err(UsageError::Unauthorized) => {
-            let new_token =
-                refresh_token_flow(&oauth.refresh_token, &source, &raw).await?;
-            let api = request_usage(&new_token)
-                .await
-                .map_err(|e| match e {
-                    UsageError::Unauthorized => "Unauthorized after token refresh".to_string(),
-                    UsageError::RateLimited => "RATE_LIMITED".to_string(),
-                    UsageError::Other(msg) => msg,
-                })?;
+            let new_token = refresh_token_flow(&oauth.refresh_token, &source, &raw).await?;
+            let api = request_usage(&new_token).await.map_err(|e| match e {
+                UsageError::Unauthorized => "Unauthorized after token refresh".to_string(),
+                UsageError::RateLimited => "RATE_LIMITED".to_string(),
+                UsageError::Other(msg) => msg,
+            })?;
             Ok(build_response(api, &oauth))
         }
         Err(UsageError::Other(msg)) => Err(msg),
@@ -142,7 +139,9 @@ pub async fn fetch_usage() -> Result<UsageResponse, String> {
 fn read_credentials_raw() -> Result<(String, CredentialSource), String> {
     // 1. Try ~/.claude/.credentials.json
     if let Ok(home) = std::env::var("HOME") {
-        let path = PathBuf::from(&home).join(".claude").join(".credentials.json");
+        let path = PathBuf::from(&home)
+            .join(".claude")
+            .join(".credentials.json");
         if let Ok(raw) = fs::read_to_string(&path) {
             return Ok((raw, CredentialSource::File(path)));
         }

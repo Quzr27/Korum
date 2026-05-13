@@ -35,6 +35,11 @@ const SIDEBAR_RIGHT_EDGE = 288 + 12 + 24; // w-72 (288px) + left-3 (12px) + gap 
 const GRID_TOP = 13; // align with sidebar top-3 (13px)
 const GRID_GAP = 24;
 
+function getOpenFileDrawerWidth(): number {
+  return document.querySelector<HTMLElement>('.sidebar-file-drawer[data-state="open"]')
+    ?.getBoundingClientRect().width ?? 0;
+}
+
 export default function App() {
   // ── Loading ──
   const [loaded, setLoaded] = useState(false);
@@ -663,6 +668,11 @@ export default function App() {
     }
   }, [addWorkspace, addWindow]);
 
+  const resetViewport = useCallback(() => {
+    setZoom(1);
+    setPan({ x: getOpenFileDrawerWidth(), y: 0 });
+  }, []);
+
   // ── Sidebar terminal click → switch workspace + zoom-to-fit + focus ──
   const focusWindowFromSidebar = useCallback((id: string) => {
     const win = stateRef.current.windows.find((w) => w.id === id);
@@ -685,7 +695,7 @@ export default function App() {
     const centerY = win.y + win.height / 2;
     const vpW = window.innerWidth;
     const vpH = window.innerHeight;
-    const fileDrawerW = document.querySelector('.sidebar-file-drawer[data-state="open"]') ? 240 : 0;
+    const fileDrawerW = getOpenFileDrawerWidth();
     const visibleCenterX = (SIDEBAR_RIGHT_EDGE + fileDrawerW + vpW) / 2;
     setPan({ x: visibleCenterX - centerX * targetZoom, y: vpH / 2 - centerY * targetZoom });
     setZoom(targetZoom);
@@ -886,13 +896,8 @@ export default function App() {
           <SettingsPanel dismissVersion={settingsDismissVersion} />
           <button
             type="button"
-            className="glass-subtle flex h-8 cursor-pointer items-center justify-center rounded-lg text-[11px] font-medium tabular-nums text-muted-foreground transition-colors select-none hover:text-foreground"
-            onClick={() => {
-              setZoom(1);
-              // Offset pan.x so content starts after file tree drawer if open (w-60 = 240px)
-              const fileDrawerOpen = !!document.querySelector('.sidebar-file-drawer[data-state="open"]');
-              setPan({ x: fileDrawerOpen ? 240 : 0, y: 0 });
-            }}
+            className="glass-subtle flex h-8 cursor-pointer items-center justify-center rounded-lg text-[11px] font-medium tabular-nums text-muted-foreground transition-colors select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35"
+            onClick={resetViewport}
             aria-label="Reset viewport"
           >
             {Math.round(zoom * 100)}%

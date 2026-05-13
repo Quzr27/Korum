@@ -91,8 +91,9 @@ export default function SettingsPanel({ dismissVersion = 0 }: SettingsPanelProps
         ref={panelRef}
         role="dialog"
         aria-label="Settings"
+        aria-hidden={!open}
         data-slot="settings-panel"
-        className={`fixed top-3 bottom-3 right-3 z-50 flex w-3/4 max-w-sm flex-col rounded-xl border border-border bg-popover text-xs/relaxed text-popover-foreground shadow-2xl shadow-black/25 transition-transform duration-300 ease-out ${open ? "translate-x-0" : "translate-x-[calc(100%+0.75rem)]"}`}
+        className={`fixed top-3 bottom-3 right-3 z-50 flex w-3/4 max-w-sm flex-col rounded-xl border border-border bg-popover text-xs/relaxed text-popover-foreground shadow-2xl shadow-black/25 transition-transform duration-300 ease-out ${open ? "pointer-events-auto translate-x-0" : "pointer-events-none translate-x-[calc(100%+0.75rem)]"}`}
       >
         <div className="flex flex-col gap-1 p-4">
           <h2 className="font-heading text-sm font-medium text-foreground">

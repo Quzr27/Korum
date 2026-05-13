@@ -7,6 +7,16 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { useSettings } from "@/lib/settings-context";
+import {
+  CACHE_KEY_CLAUDE,
+  CACHE_KEY_CODEX,
+  USAGE_BACKOFF_INTERVAL,
+  USAGE_POLL_INTERVAL,
+  clearLegacyUsageCache,
+  isCacheFresh,
+  loadCached,
+  saveCache,
+} from "@/lib/usage-cache";
 import type {
   ClaudeUsageResponse,
   CodexUsageResponse,
@@ -14,45 +24,12 @@ import type {
   UsageBucket,
 } from "@/types";
 
-const POLL_INTERVAL = 5 * 60 * 1000; // 5 minutes
-const BACKOFF_INTERVAL = 10 * 60 * 1000; // 10 minutes after 429
-// v2: schema changed — resets_at can be null, new buckets added. Older caches are ignored.
-const CACHE_KEY_CLAUDE = "korum-usage-claude-v2";
-const CACHE_KEY_CODEX = "korum-usage-codex";
 // One-time cleanup of the pre-v2 key so it doesn't sit orphaned in localStorage forever.
-try { localStorage.removeItem("korum-usage-claude"); } catch { /* noop */ }
+clearLegacyUsageCache();
 
 // Module-level state survives component remount (toggle off/on)
 let claudeBackoffUntil = 0;
 let fetchInFlight = false;
-
-function loadCached<T>(key: string): { data: T; ts: number } | null {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const entry = JSON.parse(raw) as { data: T; ts: number };
-    return entry.data ? entry : null;
-  } catch {
-    return null;
-  }
-}
-
-function isCacheFresh(key: string): boolean {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return false;
-    const entry = JSON.parse(raw) as { ts: number };
-    return Date.now() - entry.ts < POLL_INTERVAL;
-  } catch {
-    return false;
-  }
-}
-
-function saveCache(key: string, data: unknown): void {
-  try {
-    localStorage.setItem(key, JSON.stringify({ data, ts: Date.now() }));
-  } catch { /* quota exceeded — ignore */ }
-}
 
 function formatTimeUntil(isoString: string | null | undefined): string {
   if (!isoString) return "";
@@ -171,7 +148,7 @@ export default function UsageLimitsCard() {
           ? Promise.resolve(null)
           : invoke<ClaudeUsageResponse>("fetch_claude_usage").catch((err: unknown) => {
               if (isRateLimited(err)) {
-                claudeBackoffUntil = Date.now() + BACKOFF_INTERVAL;
+                claudeBackoffUntil = Date.now() + USAGE_BACKOFF_INTERVAL;
               }
               return null;
             });
@@ -198,7 +175,7 @@ export default function UsageLimitsCard() {
     };
 
     void fetchAll();
-    const id = setInterval(() => void fetchAll(), POLL_INTERVAL);
+    const id = setInterval(() => void fetchAll(), USAGE_POLL_INTERVAL);
     return () => {
       alive = false;
       clearInterval(id);
