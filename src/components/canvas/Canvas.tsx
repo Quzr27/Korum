@@ -501,50 +501,52 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
     };
   }
 
-  const handleClick = (e: React.MouseEvent<SVGSVGElement>) => {
-    const svgRect = e.currentTarget.getBoundingClientRect();
-    const mx = e.clientX - svgRect.left;
-    const my = e.clientY - svgRect.top;
+  const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const buttonRect = e.currentTarget.getBoundingClientRect();
+    const mx = ((e.clientX - buttonRect.left) / buttonRect.width) * MINIMAP_W;
+    const my = ((e.clientY - buttonRect.top) / buttonRect.height) * MINIMAP_H;
     const worldX = minX + (mx - padded) / scale;
     const worldY = minY + (my - padded) / scale;
     onNavigate(worldX, worldY);
   };
 
   return (
-    <svg
-      width={MINIMAP_W}
-      height={MINIMAP_H}
-      className="glass-subtle fixed bottom-12 right-3 z-40 rounded-xl cursor-crosshair"
+    <button
+      type="button"
+      className="glass-subtle fixed bottom-12 right-3 z-40 h-[100px] w-[160px] cursor-crosshair rounded-xl focus-visible:ring-2 focus-visible:ring-ring/35"
       onClick={handleClick}
+      aria-label="Navigate canvas minimap"
     >
-      {/* Window rectangles */}
-      {windows.map((w) => (
-        <rect
-          key={w.id}
-          x={toMiniX(w.x)}
-          y={toMiniY(w.y)}
-          width={w.width * scale}
-          height={w.height * scale}
-          rx={1}
-          className={w.id === activeWindowId ? "fill-primary/40 stroke-primary" : "fill-muted-foreground/20 stroke-muted-foreground/30"}
-          strokeWidth={0.5}
-        />
-      ))}
+      <svg width={MINIMAP_W} height={MINIMAP_H} viewBox={`0 0 ${MINIMAP_W} ${MINIMAP_H}`} className="h-full w-full" aria-hidden="true">
+        {/* Window rectangles */}
+        {windows.map((w) => (
+          <rect
+            key={w.id}
+            x={toMiniX(w.x)}
+            y={toMiniY(w.y)}
+            width={w.width * scale}
+            height={w.height * scale}
+            rx={1}
+            className={w.id === activeWindowId ? "fill-primary/40 stroke-primary" : "fill-muted-foreground/20 stroke-muted-foreground/30"}
+            strokeWidth={0.5}
+          />
+        ))}
 
-      {/* Viewport indicator */}
-      {vpRect && (
-        <rect
-          x={vpRect.x}
-          y={vpRect.y}
-          width={vpRect.w}
-          height={vpRect.h}
-          rx={1}
-          fill="none"
-          className="stroke-foreground/30"
-          strokeWidth={1}
-          strokeDasharray="3 2"
-        />
-      )}
-    </svg>
+        {/* Viewport indicator */}
+        {vpRect && (
+          <rect
+            x={vpRect.x}
+            y={vpRect.y}
+            width={vpRect.w}
+            height={vpRect.h}
+            rx={1}
+            fill="none"
+            className="stroke-foreground/30"
+            strokeWidth={1}
+            strokeDasharray="3 2"
+          />
+        )}
+      </svg>
+    </button>
   );
 });

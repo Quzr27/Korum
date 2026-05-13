@@ -4,6 +4,23 @@ All notable changes to Korum will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.2-alpha] - 2026-05-13
+
+### Added
+- **Static landing page** — new `LP/` microsite with app screenshot, release CTA, social metadata, manifest, and lightweight animated background
+
+### Removed
+- **Global Agent Monitor** — removed the right-rail monitor, workspace start actions, frontend session projections, backend process snapshots, provider telemetry sidecars, and the `tungstenite` dependency. Agent workflows now stay in the terminal/CLI instead of app-level monitoring.
+
+### Fixed
+- **Terminal live-write rendering repair** — xterm display refresh now coalesces live output repairs while preserving scroll position
+- **Usage limits cache reads** — cache loading/freshness now share one validated parser, avoiding duplicated localStorage parsing
+- **File drawer viewport offset** — viewport reset and sidebar focus use the actual open drawer width instead of a fixed width
+- **Minimap accessibility** — minimap navigation is now exposed as a focusable button while keeping the SVG presentation hidden
+
+### Changed
+- Simplified sidebar file drawer visibility and release metadata for the 0.2.2 alpha
+
 ## [0.2.1-alpha] - 2026-04-20
 
 ### Fixed

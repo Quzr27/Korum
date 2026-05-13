@@ -7,11 +7,11 @@ mod quit_guard;
 mod storage;
 
 use commands::{
-    attach_terminal, confirm_app_exit, create_directory, create_file, create_terminal,
-    delete_path, detach_terminal, fetch_claude_usage, fetch_codex_usage, get_file_diff,
-    get_git_status, kill_terminal, load_settings, load_state, read_code_file_content,
-    read_directory, read_file_content, rename_path, resize_terminal, save_settings, save_state,
-    start_watching, stop_watching, write_terminal,
+    attach_terminal, confirm_app_exit, create_directory, create_file, create_terminal, delete_path,
+    detach_terminal, fetch_claude_usage, fetch_codex_usage, get_file_diff, get_git_status,
+    kill_terminal, load_settings, load_state, read_code_file_content, read_directory,
+    read_file_content, rename_path, resize_terminal, save_settings, save_state, start_watching,
+    stop_watching, write_terminal,
 };
 use pty::PtyState;
 use quit_guard::QuitGuardState;
@@ -28,7 +28,11 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
         name: Some(pkg_info.name.clone()),
         version: Some(pkg_info.version.to_string()),
         copyright: config.bundle.copyright.clone(),
-        authors: config.bundle.publisher.clone().map(|publisher| vec![publisher]),
+        authors: config
+            .bundle
+            .publisher
+            .clone()
+            .map(|publisher| vec![publisher]),
         ..Default::default()
     };
 

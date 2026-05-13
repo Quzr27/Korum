@@ -144,7 +144,10 @@ pub fn read_code_file_content(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn get_file_diff(path: String, root: String) -> Result<Vec<crate::file_tree::DiffLine>, String> {
+pub fn get_file_diff(
+    path: String,
+    root: String,
+) -> Result<Vec<crate::file_tree::DiffLine>, String> {
     crate::file_tree::get_file_diff(&path, &root)
 }
 
@@ -178,9 +181,6 @@ pub fn start_watching(
 }
 
 #[tauri::command]
-pub fn stop_watching(
-    state: State<'_, FileWatcherState>,
-    root_path: String,
-) -> Result<(), String> {
+pub fn stop_watching(state: State<'_, FileWatcherState>, root_path: String) -> Result<(), String> {
     crate::file_tree::stop_watching(&root_path, &state)
 }

@@ -28,7 +28,8 @@ fn ensure_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
     let tmp = path.with_extension("tmp");
     let mut file = fs::File::create(&tmp).map_err(|e| format!("create tmp: {e}"))?;
-    file.write_all(data).map_err(|e| format!("write tmp: {e}"))?;
+    file.write_all(data)
+        .map_err(|e| format!("write tmp: {e}"))?;
     file.sync_all().map_err(|e| format!("sync tmp: {e}"))?;
     drop(file);
     fs::rename(&tmp, path).map_err(|e| format!("rename tmp→target: {e}"))?;
@@ -85,21 +86,22 @@ fn is_valid_window_shape(value: &serde_json::Value) -> bool {
         && has_optional_number_field(value, "createdAt")
         && has_optional_number_field(value, "updatedAt");
 
-    base_valid && match kind {
-        "terminal" => {
-            has_optional_string_field(value, "terminalId")
-                && has_optional_string_field(value, "initialCwd")
+    base_valid
+        && match kind {
+            "terminal" => {
+                has_optional_string_field(value, "terminalId")
+                    && has_optional_string_field(value, "initialCwd")
+            }
+            "note" => {
+                has_optional_string_field(value, "content")
+                    && has_optional_string_field(value, "sourcePath")
+            }
+            "code" => {
+                has_string_field(value, "sourcePath")
+                    && has_optional_string_field(value, "viewMode")
+            }
+            _ => false,
         }
-        "note" => {
-            has_optional_string_field(value, "content")
-                && has_optional_string_field(value, "sourcePath")
-        }
-        "code" => {
-            has_string_field(value, "sourcePath")
-                && has_optional_string_field(value, "viewMode")
-        }
-        _ => false,
-    }
 }
 
 fn is_valid_viewport_shape(value: &serde_json::Value) -> bool {
@@ -110,13 +112,19 @@ fn is_valid_viewport_shape(value: &serde_json::Value) -> bool {
 }
 
 fn is_valid_state_shape(value: &serde_json::Value) -> bool {
-    let Some(workspaces) = value.get("workspaces").and_then(serde_json::Value::as_array) else {
+    let Some(workspaces) = value
+        .get("workspaces")
+        .and_then(serde_json::Value::as_array)
+    else {
         return false;
     };
     let Some(windows) = value.get("windows").and_then(serde_json::Value::as_array) else {
         return false;
     };
-    let Some(viewports) = value.get("viewports").and_then(serde_json::Value::as_object) else {
+    let Some(viewports) = value
+        .get("viewports")
+        .and_then(serde_json::Value::as_object)
+    else {
         return false;
     };
 
@@ -572,11 +580,7 @@ mod tests {
 
         // Write a version-2 primary
         let bad = serde_json::json!({ "version": 2, "workspaces": [] });
-        fs::write(
-            dir.join("state.json"),
-            serde_json::to_string(&bad).unwrap(),
-        )
-        .unwrap();
+        fs::write(dir.join("state.json"), serde_json::to_string(&bad).unwrap()).unwrap();
 
         let loaded = load_state_from_dir(&dir).unwrap();
         assert_eq!(loaded["version"], 1);
@@ -604,7 +608,11 @@ mod tests {
             "windows": [],
             "viewports": {}
         });
-        fs::write(dir.join("state.json"), serde_json::to_string(&invalid).unwrap()).unwrap();
+        fs::write(
+            dir.join("state.json"),
+            serde_json::to_string(&invalid).unwrap(),
+        )
+        .unwrap();
 
         let loaded = load_state_from_dir(&dir).unwrap();
         assert_eq!(loaded["activeWorkspaceId"], "ws-1");
@@ -728,7 +736,11 @@ mod tests {
         )
         .unwrap();
 
-        fs::write(dir.join("state.json"), r#"{"version":99,"marker":"bad-primary"}"#).unwrap();
+        fs::write(
+            dir.join("state.json"),
+            r#"{"version":99,"marker":"bad-primary"}"#,
+        )
+        .unwrap();
 
         let new_state = serde_json::json!({ "version": 1, "marker": "new-save" });
         save_state_to_dir(&dir, &new_state).unwrap();
@@ -758,10 +770,7 @@ mod tests {
 
     #[test]
     fn save_creates_config_dir_if_missing() {
-        let root = std::env::temp_dir().join(format!(
-            "korum-test-nested-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("korum-test-nested-{}", uuid::Uuid::new_v4()));
         let dir = root.join("sub").join("dir");
         assert!(!dir.exists());
 
