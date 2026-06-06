@@ -1,7 +1,9 @@
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 
 /// Max buffered PTY output per terminal (~100KB ≈ 50 screens of text)
@@ -9,7 +11,9 @@ const MAX_BUFFER_SIZE: usize = 102_400;
 
 struct TerminalStream {
     channel: Option<Channel<Vec<u8>>>,
+    replay: VecDeque<u8>,
     buffer: VecDeque<u8>,
+    last_output_at: Option<u64>,
 }
 
 struct TerminalInstance {
@@ -17,10 +21,30 @@ struct TerminalInstance {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     stream: Arc<Mutex<TerminalStream>>,
+    cwd: Option<PathBuf>,
 }
 
-pub struct PtyState {
+struct PtyStateInner {
     terminals: Mutex<HashMap<String, TerminalInstance>>,
+}
+
+#[derive(Clone)]
+pub struct PtyState {
+    inner: Arc<PtyStateInner>,
+}
+
+pub struct PtyAgentProbe {
+    pub cwd: Option<String>,
+    pub foreground_process_group: Option<i32>,
+    pub scrollback: String,
+    pub last_output_at: Option<u64>,
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn extend_buffer(buffer: &mut VecDeque<u8>, data: &[u8]) {
@@ -34,7 +58,9 @@ fn extend_buffer(buffer: &mut VecDeque<u8>, data: &[u8]) {
 impl PtyState {
     pub fn new() -> Self {
         Self {
-            terminals: Mutex::new(HashMap::new()),
+            inner: Arc::new(PtyStateInner {
+                terminals: Mutex::new(HashMap::new()),
+            }),
         }
     }
 
@@ -58,11 +84,13 @@ impl PtyState {
         let mut cmd = CommandBuilder::new(shell);
         cmd.arg("-l");
         cmd.env("TERM", "xterm-256color");
-        if let Some(dir) = cwd {
+        let cwd_path = cwd.and_then(|dir| {
             let path = std::path::Path::new(dir);
-            if path.is_dir() {
-                cmd.cwd(path);
-            }
+            path.is_dir()
+                .then(|| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+        });
+        if let Some(path) = cwd_path.as_deref() {
+            cmd.cwd(path);
         }
 
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
@@ -77,7 +105,9 @@ impl PtyState {
 
         let stream = Arc::new(Mutex::new(TerminalStream {
             channel: None,
+            replay: VecDeque::new(),
             buffer: VecDeque::new(),
+            last_output_at: None,
         }));
 
         let stream_ref = Arc::clone(&stream);
@@ -94,6 +124,8 @@ impl PtyState {
                         let Ok(mut stream) = stream_ref.lock() else {
                             break; // mutex poisoned — exit read loop
                         };
+                        extend_buffer(&mut stream.replay, data);
+                        stream.last_output_at = Some(now_ms());
                         if let Some(ch) = stream.channel.as_ref() {
                             if ch.send(data.to_vec()).is_err() {
                                 // Channel closed — fall back to buffering
@@ -114,9 +146,11 @@ impl PtyState {
             master: Arc::new(Mutex::new(pair.master)),
             killer,
             stream,
+            cwd: cwd_path,
         };
 
-        self.terminals
+        self.inner
+            .terminals
             .lock()
             .map_err(|e| format!("lock poisoned: {e}"))?
             .insert(id.clone(), instance);
@@ -128,6 +162,7 @@ impl PtyState {
         // acquiring the inner stream lock. This prevents nested-lock risk.
         let stream_arc = {
             let terminals = self
+                .inner
                 .terminals
                 .lock()
                 .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -161,6 +196,7 @@ impl PtyState {
     pub fn detach(&self, id: &str) -> Result<(), String> {
         let stream_arc = {
             let terminals = self
+                .inner
                 .terminals
                 .lock()
                 .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -181,6 +217,7 @@ impl PtyState {
         // the blocking write_all call. Prevents deadlock on paste + resize.
         let writer = {
             let terminals = self
+                .inner
                 .terminals
                 .lock()
                 .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -195,6 +232,7 @@ impl PtyState {
         // the resize ioctl. Prevents deadlock during drag-resize.
         let master = {
             let terminals = self
+                .inner
                 .terminals
                 .lock()
                 .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -213,6 +251,7 @@ impl PtyState {
 
     pub fn kill(&self, id: &str) -> Result<(), String> {
         let instance = self
+            .inner
             .terminals
             .lock()
             .map_err(|e| format!("lock poisoned: {e}"))?
@@ -221,6 +260,47 @@ impl PtyState {
             let _ = inst.killer.kill();
         }
         Ok(())
+    }
+
+    pub fn agent_probe(&self, id: &str) -> Result<PtyAgentProbe, String> {
+        let (master_arc, stream_arc, cwd) = {
+            let terminals = self
+                .inner
+                .terminals
+                .lock()
+                .map_err(|e| format!("lock poisoned: {e}"))?;
+            let terminal = terminals.get(id).ok_or("Terminal not found")?;
+            (
+                Arc::clone(&terminal.master),
+                Arc::clone(&terminal.stream),
+                terminal.cwd.clone(),
+            )
+        };
+
+        let foreground_process_group = {
+            let master = master_arc
+                .lock()
+                .map_err(|e| format!("lock poisoned: {e}"))?;
+            master.process_group_leader().map(|pid| pid as i32)
+        };
+
+        let (scrollback, last_output_at) = {
+            let stream = stream_arc
+                .lock()
+                .map_err(|e| format!("lock poisoned: {e}"))?;
+            (
+                String::from_utf8_lossy(&stream.replay.iter().copied().collect::<Vec<_>>())
+                    .to_string(),
+                stream.last_output_at,
+            )
+        };
+
+        Ok(PtyAgentProbe {
+            cwd: cwd.map(|path| path.to_string_lossy().to_string()),
+            foreground_process_group,
+            scrollback,
+            last_output_at,
+        })
     }
 }
 
@@ -288,7 +368,9 @@ mod tests {
     fn stream_buffers_when_no_channel() {
         let stream = Arc::new(Mutex::new(TerminalStream {
             channel: None,
+            replay: VecDeque::new(),
             buffer: VecDeque::new(),
+            last_output_at: None,
         }));
 
         {
@@ -305,7 +387,9 @@ mod tests {
     fn detach_preserves_buffer() {
         let stream = Arc::new(Mutex::new(TerminalStream {
             channel: None,
+            replay: VecDeque::new(),
             buffer: VecDeque::from(b"existing data".to_vec()),
+            last_output_at: None,
         }));
 
         // Simulate detach: set channel to None

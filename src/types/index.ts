@@ -2,6 +2,19 @@ export type Point2D = { x: number; y: number };
 
 export type WindowKind = "terminal" | "note" | "code";
 
+export type AgentKind = "claude" | "codex" | "aider" | "unknown";
+export type AgentActivity = "working" | "waiting" | "idle" | "unknown";
+export type AgentStatusSource = "claude-json" | "codex-fs" | "scrollback" | "none";
+
+export interface AgentStatus {
+  terminalId: string;
+  kind: AgentKind;
+  activity: AgentActivity;
+  detail?: string;
+  source: AgentStatusSource;
+  updatedAt: number;
+}
+
 export interface BaseWindow {
   id: string;
   x: number;
