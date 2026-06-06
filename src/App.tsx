@@ -15,6 +15,11 @@ import { persistState, loadPersistedState } from "@/lib/persistence";
 import { DEFAULT_VIEWPORT, hydratePersistedState } from "@/lib/persisted-state";
 import { stripSessionWindowFields } from "@/lib/window-persistence";
 import {
+  AGENT_STATUS_CHANGED_EVENT,
+  getAgentActivityDataValue,
+  getAgentMinimapPaint,
+} from "@/lib/agent-status";
+import {
   buildTerminalHydrationQueue,
   collectTerminalIds,
   TERMINAL_HYDRATION_CONCURRENCY,
@@ -23,7 +28,7 @@ import { isWindowInViewport } from "@/lib/viewport";
 import { WINDOW_GRID_GAP } from "@/lib/window-snapping";
 import { confirmAppQuit, QUIT_REQUESTED_EVENT } from "@/lib/quit-guard";
 import type { PersistedState, ViewportState } from "@/lib/persistence";
-import type { WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest, CodeViewMode } from "@/types";
+import type { AgentStatus, WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest, CodeViewMode } from "@/types";
 
 interface AppSnapshot {
   workspaces: Workspace[];
@@ -88,6 +93,7 @@ export default function App() {
   const hydratedTerminalIdsRef = useRef(new Set<string>());
   const bootingTerminalIdsRef = useRef(new Set<string>());
   const terminalSnapshotsRef = useRef<Record<string, string>>({});
+  const agentStatusesRef = useRef<Map<string, AgentStatus>>(new Map());
   const codeTargetNonceRef = useRef(0);
 
   // ── State ref (always current, avoids stale closures in save callbacks) ──
@@ -100,6 +106,76 @@ export default function App() {
   // ── Save infrastructure ──
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const confirmedExitRef = useRef(false);
+
+  const applyAgentStatusesToDom = useCallback(() => {
+    const statuses = agentStatusesRef.current;
+    const terminalIds = new Set(
+      stateRef.current.windows
+        .filter((window) => window.type === "terminal")
+        .map((window) => window.id),
+    );
+
+    document.querySelectorAll<HTMLElement>(".window[data-window-id]").forEach((node) => {
+      const terminalId = node.dataset.windowId;
+      if (!terminalId || !terminalIds.has(terminalId)) {
+        delete node.dataset.agentActivity;
+        delete node.dataset.agentKind;
+        return;
+      }
+
+      const status = statuses.get(terminalId);
+      node.dataset.agentActivity = getAgentActivityDataValue(status);
+      node.dataset.agentKind = status?.kind ?? "unknown";
+    });
+
+    document.querySelectorAll<SVGRectElement>("rect[data-minimap-window-id]").forEach((node) => {
+      const terminalId = node.dataset.minimapWindowId;
+      if (!terminalId || !terminalIds.has(terminalId)) {
+        node.style.removeProperty("fill");
+        node.style.removeProperty("stroke");
+        node.style.removeProperty("stroke-width");
+        node.style.removeProperty("fill-opacity");
+        node.style.removeProperty("stroke-opacity");
+        return;
+      }
+
+      const paint = getAgentMinimapPaint(statuses.get(terminalId));
+      node.dataset.agentActivity = getAgentActivityDataValue(statuses.get(terminalId));
+      node.style.fill = paint.fill;
+      node.style.stroke = paint.stroke;
+      node.style.strokeWidth = "1.2";
+      node.style.fillOpacity = "0.34";
+      node.style.strokeOpacity = "0.95";
+    });
+
+    document.querySelectorAll<SVGCircleElement>("circle[data-minimap-status-dot-id]").forEach((node) => {
+      const terminalId = node.dataset.minimapStatusDotId;
+      if (!terminalId || !terminalIds.has(terminalId)) {
+        node.style.removeProperty("fill");
+        node.style.removeProperty("stroke");
+        node.style.removeProperty("stroke-width");
+        return;
+      }
+
+      const paint = getAgentMinimapPaint(statuses.get(terminalId));
+      node.dataset.agentActivity = getAgentActivityDataValue(statuses.get(terminalId));
+      node.style.fill = paint.fill;
+      node.style.stroke = paint.stroke;
+      node.style.strokeWidth = "0.75";
+    });
+  }, []);
+
+  const mergeAgentStatuses = useCallback((statuses: AgentStatus[]) => {
+    for (const status of statuses) {
+      agentStatusesRef.current.set(status.terminalId, status);
+    }
+    applyAgentStatusesToDom();
+  }, [applyAgentStatusesToDom]);
+
+  const clearAgentStatus = useCallback((terminalId: string) => {
+    agentStatusesRef.current.delete(terminalId);
+    applyAgentStatusesToDom();
+  }, [applyAgentStatusesToDom]);
 
   const collectState = useCallback((): PersistedState => {
     const { workspaces, windows, activeWorkspaceId } = stateRef.current;
@@ -185,6 +261,40 @@ export default function App() {
       setLoaded(true);
     });
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+
+    invoke<AgentStatus[]>("get_agent_statuses")
+      .then((statuses) => {
+        if (alive) mergeAgentStatuses(statuses);
+      })
+      .catch((error) => {
+        console.warn("[agent-status] Initial status load failed:", error);
+      });
+
+    listen<AgentStatus[]>(AGENT_STATUS_CHANGED_EVENT, (event) => {
+      mergeAgentStatuses(event.payload);
+    }).then((fn) => {
+      if (alive) {
+        unlisten = fn;
+      } else {
+        fn();
+      }
+    }).catch((error) => {
+      console.warn("[agent-status] Event listener failed:", error);
+    });
+
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [mergeAgentStatuses]);
+
+  useEffect(() => {
+    applyAgentStatusesToDom();
+  }, [activeWorkspaceId, activeWindowId, applyAgentStatusesToDom, pan.x, pan.y, windows, zoom]);
 
   const requestQuit = useCallback(() => {
     setQuitDialogOpen(true);
@@ -463,6 +573,22 @@ export default function App() {
 
   /** Called by TerminalWindow when PTY spawns — stores ptyId in-memory (not persisted). */
   const handlePtySpawned = useCallback((windowId: string, ptyId: string | null) => {
+    const terminalWindow = stateRef.current.windows.find((w) => w.id === windowId && w.type === "terminal");
+    if (ptyId && terminalWindow?.type === "terminal") {
+      const workspace = stateRef.current.workspaces.find((ws) => ws.id === terminalWindow.workspaceId);
+      invoke("register_agent_terminal", {
+        terminalId: windowId,
+        ptyId,
+        cwd: terminalWindow.initialCwd ?? workspace?.rootPath ?? null,
+        workspaceRoot: workspace?.rootPath ?? null,
+      }).catch((error) => {
+        console.warn("[agent-status] Register failed:", error);
+      });
+    } else {
+      invoke("unregister_agent_terminal", { terminalId: windowId }).catch(() => {});
+      clearAgentStatus(windowId);
+    }
+
     setWindows((prev) =>
       prev.map((w) =>
         w.id === windowId && w.type === "terminal"
@@ -471,7 +597,7 @@ export default function App() {
       ),
     );
     // No save — ptyId is session-ephemeral
-  }, []);
+  }, [clearAgentStatus]);
 
   const handleTerminalSnapshotCaptured = useCallback((windowId: string, snapshot: string | null) => {
     if (snapshot) {
@@ -511,6 +637,10 @@ export default function App() {
   const removeWindow = useCallback((id: string) => {
     // Kill PTY before removing from state
     const win = stateRef.current.windows.find((w) => w.id === id);
+    if (win?.type === "terminal") {
+      invoke("unregister_agent_terminal", { terminalId: id }).catch(() => {});
+      clearAgentStatus(id);
+    }
     if (win?.type === "terminal" && win.ptyId) {
       invoke("kill_terminal", { id: win.ptyId }).catch(() => {});
     }
@@ -526,7 +656,7 @@ export default function App() {
       return remaining;
     });
     saveAfterUpdate(); // immediate — structural change
-  }, [saveAfterUpdate]);
+  }, [clearAgentStatus, saveAfterUpdate]);
 
   /** Position/size updates during drag — debounced 2s save. */
   const updateWindow = useCallback((id: string, updates: Partial<WindowUpdatable>) => {
@@ -648,8 +778,12 @@ export default function App() {
   const deleteWorkspace = useCallback((id: string) => {
     // Kill all PTYs for this workspace
     for (const win of stateRef.current.windows) {
-      if (win.workspaceId === id && win.type === "terminal" && win.ptyId) {
-        invoke("kill_terminal", { id: win.ptyId }).catch(() => {});
+      if (win.workspaceId === id && win.type === "terminal") {
+        invoke("unregister_agent_terminal", { terminalId: win.id }).catch(() => {});
+        clearAgentStatus(win.id);
+        if (win.ptyId) {
+          invoke("kill_terminal", { id: win.ptyId }).catch(() => {});
+        }
       }
       if (win.workspaceId === id) {
         delete terminalSnapshotsRef.current[win.id];
@@ -684,7 +818,7 @@ export default function App() {
     });
     delete viewportsRef.current[id];
     saveAfterUpdate(); // immediate — structural change
-  }, [saveAfterUpdate]);
+  }, [clearAgentStatus, saveAfterUpdate]);
 
   // ── Canvas double-click: add terminal, or auto-create scratch workspace first ──
   const handleCanvasDoubleClick = useCallback(() => {

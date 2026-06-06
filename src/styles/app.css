@@ -216,6 +216,18 @@ body,
   --canvas-grid-opacity: 0.07;
   --canvas-vignette: radial-gradient(circle at center, transparent 40%, color-mix(in oklch, black 18%, transparent) 100%);
   --canvas-blur: 120px;
+  --agent-status-working: oklch(0.68 0.16 156);
+  --agent-status-working-strong: oklch(0.58 0.18 154);
+  --agent-status-working-halo: color-mix(in oklch, var(--agent-status-working) 30%, transparent);
+  --agent-status-waiting: oklch(0.74 0.18 66);
+  --agent-status-waiting-strong: oklch(0.64 0.2 54);
+  --agent-status-waiting-halo: color-mix(in oklch, var(--agent-status-waiting) 46%, transparent);
+  --agent-status-idle: oklch(0.66 0.13 240);
+  --agent-status-idle-strong: oklch(0.56 0.15 245);
+  --agent-status-idle-halo: color-mix(in oklch, var(--agent-status-idle) 18%, transparent);
+  --agent-status-unknown: color-mix(in oklch, var(--muted-foreground) 60%, transparent);
+  --agent-status-unknown-strong: color-mix(in oklch, var(--muted-foreground) 80%, transparent);
+  --agent-status-unknown-halo: color-mix(in oklch, var(--muted-foreground) 10%, transparent);
 }
 
 .dark {
@@ -262,6 +274,18 @@ body,
   --canvas-grid-opacity: 0.08;
   --canvas-vignette: radial-gradient(circle at center, transparent 38%, color-mix(in oklch, black 20%, transparent) 100%);
   --canvas-blur: 120px;
+  --agent-status-working: oklch(0.75 0.16 154);
+  --agent-status-working-strong: oklch(0.82 0.18 152);
+  --agent-status-working-halo: color-mix(in oklch, var(--agent-status-working) 34%, transparent);
+  --agent-status-waiting: oklch(0.82 0.18 67);
+  --agent-status-waiting-strong: oklch(0.88 0.2 62);
+  --agent-status-waiting-halo: color-mix(in oklch, var(--agent-status-waiting) 52%, transparent);
+  --agent-status-idle: oklch(0.72 0.13 244);
+  --agent-status-idle-strong: oklch(0.78 0.15 246);
+  --agent-status-idle-halo: color-mix(in oklch, var(--agent-status-idle) 20%, transparent);
+  --agent-status-unknown: color-mix(in oklch, var(--muted-foreground) 64%, transparent);
+  --agent-status-unknown-strong: color-mix(in oklch, var(--muted-foreground) 86%, transparent);
+  --agent-status-unknown-halo: color-mix(in oklch, var(--muted-foreground) 12%, transparent);
 }
 
 @layer base {

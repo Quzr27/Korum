@@ -550,6 +550,8 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
         {windows.map((w) => (
           <rect
             key={w.id}
+            data-minimap-window-id={w.id}
+            data-minimap-window-type={w.type}
             x={toMiniX(w.x)}
             y={toMiniY(w.y)}
             width={w.width * scale}
@@ -559,6 +561,24 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
             strokeWidth={0.5}
           />
         ))}
+
+        {/* Terminal agent status dots */}
+        {windows.filter((w) => w.type === "terminal").map((w) => {
+          const dotX = toMiniX(w.x + w.width / 2);
+          const dotY = toMiniY(w.y + w.height / 2);
+          const dotR = Math.max(2, Math.min(4.5, Math.min(w.width * scale, w.height * scale) * 0.16));
+          return (
+            <circle
+              key={`${w.id}-agent-status`}
+              data-minimap-status-dot-id={w.id}
+              cx={dotX}
+              cy={dotY}
+              r={dotR}
+              className="fill-muted-foreground/40 stroke-background/70"
+              strokeWidth={0.75}
+            />
+          );
+        })}
 
         {/* Viewport indicator */}
         {vpRect && (

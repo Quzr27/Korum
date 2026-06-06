@@ -1,3 +1,4 @@
+mod agent_status;
 mod claude_usage;
 mod codex_usage;
 mod commands;
@@ -6,12 +7,14 @@ mod pty;
 mod quit_guard;
 mod storage;
 
+use agent_status::AgentStatusState;
 use commands::{
     attach_terminal, confirm_app_exit, create_directory, create_file, create_terminal, delete_path,
-    detach_terminal, fetch_claude_usage, fetch_codex_usage, get_file_diff, get_git_status,
-    kill_terminal, load_settings, load_state, open_external_url, read_code_file_content, read_directory,
-    read_file_content, rename_path, resize_terminal, save_settings, save_state, start_watching,
-    stop_watching, write_terminal,
+    detach_terminal, fetch_claude_usage, fetch_codex_usage, get_agent_statuses, get_file_diff,
+    get_git_status, kill_terminal, load_settings, load_state, open_external_url,
+    read_code_file_content, read_directory, read_file_content, register_agent_terminal,
+    rename_path, resize_terminal, save_settings, save_state, start_watching, stop_watching,
+    unregister_agent_terminal, write_terminal,
 };
 use pty::PtyState;
 use quit_guard::QuitGuardState;
@@ -143,6 +146,7 @@ pub fn run() {
                 let _ = app.emit(QUIT_REQUESTED_EVENT, ());
             }
         })
+        .manage(AgentStatusState::new())
         .manage(PtyState::new())
         .manage(QuitGuardState::new())
         .manage(file_tree::FileWatcherState::new())
@@ -153,6 +157,9 @@ pub fn run() {
             write_terminal,
             resize_terminal,
             kill_terminal,
+            register_agent_terminal,
+            unregister_agent_terminal,
+            get_agent_statuses,
             open_external_url,
             fetch_claude_usage,
             fetch_codex_usage,

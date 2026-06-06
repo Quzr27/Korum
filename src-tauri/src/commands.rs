@@ -1,3 +1,4 @@
+use crate::agent_status::{AgentStatus, AgentStatusState};
 use crate::file_tree::FileWatcherState;
 use crate::pty::PtyState;
 use crate::quit_guard::QuitGuardState;
@@ -59,9 +60,41 @@ pub fn kill_terminal(state: State<'_, PtyState>, id: String) -> Result<(), Strin
 }
 
 #[tauri::command]
+pub fn register_agent_terminal(
+    app: tauri::AppHandle,
+    state: State<'_, AgentStatusState>,
+    pty_state: State<'_, PtyState>,
+    terminal_id: String,
+    pty_id: String,
+    cwd: Option<String>,
+    workspace_root: Option<String>,
+) -> Result<(), String> {
+    state.register(terminal_id, pty_id, cwd, workspace_root)?;
+    state.ensure_poller(app, pty_state.inner().clone());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn unregister_agent_terminal(
+    state: State<'_, AgentStatusState>,
+    terminal_id: String,
+) -> Result<(), String> {
+    state.unregister(&terminal_id)
+}
+
+#[tauri::command]
+pub fn get_agent_statuses(state: State<'_, AgentStatusState>) -> Result<Vec<AgentStatus>, String> {
+    state.get_statuses()
+}
+
+#[tauri::command]
 pub fn open_external_url(url: String) -> Result<(), String> {
     let trimmed = url.trim();
-    if trimmed != url || trimmed.chars().any(|ch| ch.is_ascii_control() || ch.is_whitespace()) {
+    if trimmed != url
+        || trimmed
+            .chars()
+            .any(|ch| ch.is_ascii_control() || ch.is_whitespace())
+    {
         return Err("Invalid URL".to_string());
     }
 
@@ -91,7 +124,9 @@ pub fn open_external_url(url: String) -> Result<(), String> {
         command
     };
 
-    command.spawn().map_err(|err| format!("Failed to open URL: {err}"))?;
+    command
+        .spawn()
+        .map_err(|err| format!("Failed to open URL: {err}"))?;
     Ok(())
 }
 
