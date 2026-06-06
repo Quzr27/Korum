@@ -66,6 +66,7 @@ struct ApiWindow {
 
 enum UsageError {
     Unauthorized,
+    RateLimited,
     Other(String),
 }
 
@@ -84,10 +85,12 @@ pub async fn fetch_usage() -> Result<CodexUsageResponse, String> {
                 .await
                 .map_err(|e| match e {
                     UsageError::Unauthorized => "Unauthorized after token refresh".to_string(),
+                    UsageError::RateLimited => "RATE_LIMITED".to_string(),
                     UsageError::Other(msg) => msg,
                 })?;
             Ok(build_response(api))
         }
+        Err(UsageError::RateLimited) => Err("RATE_LIMITED".to_string()),
         Err(UsageError::Other(msg)) => Err(msg),
     }
 }
@@ -135,6 +138,9 @@ async fn request_usage(
         || resp.status() == reqwest::StatusCode::FORBIDDEN
     {
         return Err(UsageError::Unauthorized);
+    }
+    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(UsageError::RateLimited);
     }
     if !resp.status().is_success() {
         return Err(UsageError::Other(format!("API returned {}", resp.status())));

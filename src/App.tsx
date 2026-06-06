@@ -13,12 +13,14 @@ import Canvas from "@/components/canvas/Canvas";
 import EmptyCanvasState from "@/components/canvas/EmptyCanvasState";
 import { persistState, loadPersistedState } from "@/lib/persistence";
 import { DEFAULT_VIEWPORT, hydratePersistedState } from "@/lib/persisted-state";
+import { stripSessionWindowFields } from "@/lib/window-persistence";
 import {
   buildTerminalHydrationQueue,
   collectTerminalIds,
   TERMINAL_HYDRATION_CONCURRENCY,
 } from "@/lib/terminal-hydration";
 import { isWindowInViewport } from "@/lib/viewport";
+import { WINDOW_GRID_GAP } from "@/lib/window-snapping";
 import { confirmAppQuit, QUIT_REQUESTED_EVENT } from "@/lib/quit-guard";
 import type { PersistedState, ViewportState } from "@/lib/persistence";
 import type { WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest, CodeViewMode } from "@/types";
@@ -31,9 +33,13 @@ interface AppSnapshot {
   zoom: number;
 }
 
+interface CodeOpenTarget {
+  line: number;
+  column?: number;
+}
+
 const SIDEBAR_RIGHT_EDGE = 288 + 12 + 24; // w-72 (288px) + left-3 (12px) + gap (24px)
 const GRID_TOP = 13; // align with sidebar top-3 (13px)
-const GRID_GAP = 24;
 
 function getOpenFileDrawerWidth(): number {
   return document.querySelector<HTMLElement>('.sidebar-file-drawer[data-state="open"]')
@@ -82,6 +88,7 @@ export default function App() {
   const hydratedTerminalIdsRef = useRef(new Set<string>());
   const bootingTerminalIdsRef = useRef(new Set<string>());
   const terminalSnapshotsRef = useRef<Record<string, string>>({});
+  const codeTargetNonceRef = useRef(0);
 
   // ── State ref (always current, avoids stale closures in save callbacks) ──
   const stateRef = useRef<AppSnapshot>({ workspaces, windows, activeWorkspaceId, pan, zoom });
@@ -102,11 +109,11 @@ export default function App() {
       savedAt: Date.now(),
       activeWorkspaceId,
       workspaces,
-      // Strip session-only ptyId before persisting; merge pending z-index overrides
+      // Strip session-only fields before persisting; merge pending z-index overrides
       windows: windows.map((w): WindowState => {
         const pendingZ = pendingZIndexRef.current.get(w.id);
         const withZ = pendingZ != null ? { ...w, zIndex: pendingZ } : w;
-        return withZ.type === "terminal" ? (({ ptyId: _, ...rest }) => rest)(withZ) : withZ;
+        return stripSessionWindowFields(withZ);
       }),
       viewports: { ...viewportsRef.current },
       nextZ: nextZRef.current,
@@ -384,12 +391,12 @@ export default function App() {
   }, [saveAfterUpdate]);
 
   /** Opens a file from the file tree as a CodeWindow (read-only, syntax highlighted). */
-  const openFile = useCallback((filePath: string, workspaceId: string) => {
+  const openFile = useCallback((filePath: string, workspaceId: string, target?: CodeOpenTarget) => {
     // Check for existing CodeWindow or legacy NoteWindow with same source
     const existing = stateRef.current.windows.find(
       (w) => w.workspaceId === workspaceId &&
         ((w.type === "code" && w.sourcePath === filePath) ||
-         (w.type === "note" && w.sourcePath === filePath)),
+         (!target && w.type === "note" && w.sourcePath === filePath)),
     );
 
     if (existing) {
@@ -398,6 +405,21 @@ export default function App() {
       const el = document.querySelector<HTMLElement>(`.canvas-world [data-window-id="${existing.id}"]`);
       if (el) el.style.zIndex = String(z);
       pendingZIndexRef.current.set(existing.id, z);
+      if (existing.type === "code" && target) {
+        const targetNonce = ++codeTargetNonceRef.current;
+        setWindows((prev) => prev.map((w) => (
+          w.id === existing.id && w.type === "code"
+            ? {
+                ...w,
+                viewMode: "file",
+                targetLine: target.line,
+                targetColumn: target.column,
+                targetNonce,
+                updatedAt: Date.now(),
+              }
+            : w
+        )));
+      }
       setActiveWindowId(existing.id);
       return;
     }
@@ -419,6 +441,9 @@ export default function App() {
       type: "code",
       sourcePath: filePath,
       viewMode: "file",
+      targetLine: target?.line,
+      targetColumn: target?.column,
+      targetNonce: target ? ++codeTargetNonceRef.current : undefined,
       createdAt: now,
       updatedAt: now,
     };
@@ -426,6 +451,15 @@ export default function App() {
     setActiveWindowId(w.id);
     saveAfterUpdate();
   }, [saveAfterUpdate]);
+
+  const openTerminalFileLink = useCallback((
+    workspaceId: string,
+    filePath: string,
+    line: number,
+    column?: number,
+  ) => {
+    openFile(filePath, workspaceId, { line, column });
+  }, [openFile]);
 
   /** Called by TerminalWindow when PTY spawns — stores ptyId in-memory (not persisted). */
   const handlePtySpawned = useCallback((windowId: string, ptyId: string | null) => {
@@ -534,7 +568,7 @@ export default function App() {
       const wsWindows = prev.filter((w) => w.workspaceId === wsId);
       if (wsWindows.length === 0) return prev;
       const currentZoom = stateRef.current.zoom;
-      const maxRowWidth = Math.max((window.innerWidth - SIDEBAR_RIGHT_EDGE - GRID_GAP) / currentZoom, 800);
+      const maxRowWidth = Math.max((window.innerWidth - SIDEBAR_RIGHT_EDGE - WINDOW_GRID_GAP) / currentZoom, 800);
       const positions = new Map<string, { x: number; y: number }>();
 
       // Group by type — notes first, then code files, then terminals
@@ -551,11 +585,11 @@ export default function App() {
         for (const w of group) {
           if (curX + w.width > SIDEBAR_RIGHT_EDGE + maxRowWidth && curX > SIDEBAR_RIGHT_EDGE) {
             curX = SIDEBAR_RIGHT_EDGE;
-            curY += rowHeight + GRID_GAP;
+            curY += rowHeight + WINDOW_GRID_GAP;
             rowHeight = 0;
           }
           positions.set(w.id, { x: curX, y: curY });
-          curX += w.width + GRID_GAP;
+          curX += w.width + WINDOW_GRID_GAP;
           rowHeight = Math.max(rowHeight, w.height);
         }
         return group.length > 0 ? curY + rowHeight : startY;
@@ -563,7 +597,7 @@ export default function App() {
 
       let bottomY = GRID_TOP;
       for (let i = 0; i < groups.length; i++) {
-        if (i > 0) bottomY += GRID_GAP;
+        if (i > 0) bottomY += WINDOW_GRID_GAP;
         bottomY = layoutGroup(groups[i], bottomY);
       }
 
@@ -837,6 +871,7 @@ export default function App() {
         onArrangeWindows={arrangeWindows}
         onCreateWorkspace={() => setCreateDialogOpen(true)}
         onPasteRequest={handlePasteRequest}
+        onOpenTerminalFileLink={openTerminalFileLink}
         onViewModeChange={setCodeViewMode}
       />
 

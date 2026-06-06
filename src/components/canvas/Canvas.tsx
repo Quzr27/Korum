@@ -14,6 +14,7 @@ import {
 import { useSettings } from "@/lib/settings-context";
 import { selectLiveTerminalIds } from "@/lib/live-terminals";
 import { isWindowInViewport } from "@/lib/viewport";
+import type { SnapTargetRect } from "@/lib/window-snapping";
 import type { WindowState, WindowUpdatable, Workspace, Point2D, PasteRequest, CodeViewMode } from "@/types";
 import { WORKSPACE_COLORS } from "@/types";
 
@@ -47,6 +48,7 @@ interface CanvasProps {
   onArrangeWindows: () => void;
   onCreateWorkspace: () => void;
   onPasteRequest: (request: PasteRequest) => void;
+  onOpenTerminalFileLink: (workspaceId: string, filePath: string, line: number, column?: number) => void;
   onViewModeChange: (id: string, mode: CodeViewMode) => void;
 }
 
@@ -76,6 +78,7 @@ export default memo(function Canvas({
   onArrangeWindows,
   onCreateWorkspace,
   onPasteRequest,
+  onOpenTerminalFileLink,
   onViewModeChange,
 }: CanvasProps) {
   const { settings } = useSettings();
@@ -90,6 +93,9 @@ export default memo(function Canvas({
   const viewportRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const dotsRef = useRef<HTMLDivElement>(null);
+  const snapGuideLayerRef = useRef<HTMLDivElement>(null);
+  const snapTargetsRef = useRef<readonly SnapTargetRect[]>([]);
+  const snapTargetSignatureRef = useRef("");
   const panRef = useRef(pan);
   const zoomRef = useRef(zoom);
   const motionRef = useRef(false);
@@ -107,6 +113,13 @@ export default memo(function Canvas({
       return isWindowInViewport(w, pan, zoom, vpW, vpH, buffer);
     });
   }, [visibleWindows, pan, zoom, activeWindowId]);
+  const snapTargetSignature = visibleWindows
+    .map(({ id, x, y, width, height }) => `${id}:${x}:${y}:${width}:${height}`)
+    .join("|");
+  if (snapTargetSignatureRef.current !== snapTargetSignature) {
+    snapTargetSignatureRef.current = snapTargetSignature;
+    snapTargetsRef.current = visibleWindows.map(({ id, x, y, width, height }) => ({ id, x, y, width, height }));
+  }
 
   // Sync refs from React state (except during active motion)
   if (!motionRef.current) {
@@ -164,6 +177,7 @@ export default memo(function Canvas({
       dotsRef.current.style.backgroundSize = `${24 * z}px ${24 * z}px`;
       dotsRef.current.style.backgroundPosition = `${p.x % (24 * z)}px ${p.y % (24 * z)}px`;
     }
+    snapGuideLayerRef.current?.style.setProperty("--snap-guide-inverse-zoom", String(1 / z));
   }, []);
 
   const handleWheel = useCallback(
@@ -332,6 +346,12 @@ export default memo(function Canvas({
           className="canvas-world"
           style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
         >
+          <div
+            ref={snapGuideLayerRef}
+            className="canvas-snap-guides"
+            aria-hidden="true"
+            style={{ "--snap-guide-inverse-zoom": 1 / zoom } as React.CSSProperties}
+          />
           {renderedWindows.map((w) => {
             const ws = wsMap.get(w.workspaceId);
             const wsColor = ws ? WORKSPACE_COLORS[ws.color] : undefined;
@@ -348,8 +368,11 @@ export default memo(function Canvas({
                   shouldAttach={shouldAttach}
                   terminalSnapshot={terminalSnapshots[w.id]}
                   zoomRef={zoomRef}
+                  snapTargetsRef={snapTargetsRef}
+                  snapGuideLayerRef={snapGuideLayerRef}
                   wsColor={wsColor}
                   cwd={w.initialCwd ?? ws?.rootPath}
+                  workspaceRoot={ws?.rootPath}
                   onClose={onRemove}
                   onHydrationSettled={onTerminalHydrationSettled}
                   onPtySpawned={onPtySpawned}
@@ -358,6 +381,7 @@ export default memo(function Canvas({
                   onFocus={onFocus}
                   onRename={onRename}
                   onPasteRequest={onPasteRequest}
+                  onOpenFileLink={onOpenTerminalFileLink}
                 />
               );
             }
@@ -369,6 +393,8 @@ export default memo(function Canvas({
                   window={w}
                   isActive={activeWindowId === w.id}
                   zoomRef={zoomRef}
+                  snapTargetsRef={snapTargetsRef}
+                  snapGuideLayerRef={snapGuideLayerRef}
                   wsColor={wsColor}
                   workspaceRoot={ws?.rootPath}
                   onClose={onRemove}
@@ -386,6 +412,8 @@ export default memo(function Canvas({
                 window={w}
                 isActive={activeWindowId === w.id}
                 zoomRef={zoomRef}
+                snapTargetsRef={snapTargetsRef}
+                snapGuideLayerRef={snapGuideLayerRef}
                 wsColor={wsColor}
                 onClose={onRemove}
                 onUpdate={onUpdate}

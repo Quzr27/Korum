@@ -4,6 +4,26 @@ All notable changes to Korum will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] - 2026-06-06
+
+### Added
+- **Terminal Smart Links** — terminal output now links http(s) URLs and local file paths directly from xterm. File links support absolute paths, workspace-relative paths, root-level files, `file:line[:column]`, `file(line,column)`, standalone path rows, ESLint-style diagnostics, wrapped terminal rows, and wide Unicode cell mapping.
+- **CodeWindow link targets** — opening a terminal file link reuses or creates a CodeWindow, switches it to File mode, scrolls to the target line, and briefly highlights it without persisting transient target state.
+- **Active file reveal** — opening a Code/Note file now opens the workspace file drawer, expands ancestor folders, fetches missing directories, and scrolls the active row into view while preserving the user's file filter.
+- **Magnetic pane snapping** — terminal, note, and code windows snap to neighboring pane edges and the standard 24px grid gap with zoom-stable alignment guides.
+- **Expanded Claude usage rows** — Usage Limits now renders Design (`seven_day_omelette`), Cowork (`seven_day_cowork`), nullable credits, and unlimited/disabled extra usage states.
+
+### Changed
+- **Release status** — version metadata now targets the stable `v0.3.0` tag; GitHub release automation will create a draft non-prerelease release for this tag.
+- **Usage rate-limit behavior** — Codex usage fetches now share the 10-minute 429 backoff behavior already used by Claude.
+- **Persistence hygiene** — terminal PTY ids and CodeWindow link-target fields are stripped from saved state via a shared session-field helper.
+
+### Fixed
+- **Claude usage parsing** — handles nullable `extra_usage` fields and new Claude buckets without falling back to stale cache data.
+- **CodeWindow auto-refresh race** — file watcher reloads can no longer leave a CodeWindow stuck in the loading state.
+- **Terminal file path clicks** — standalone paths like `package.json` and `src/pages/index.astro` are now clickable and open at line 1.
+- **Local dev artifacts** — `.mcp.json` and `.codegraph/` are ignored so local tool configuration does not leak into release commits.
+
 ## [0.2.2-alpha] - 2026-05-13
 
 ### Added

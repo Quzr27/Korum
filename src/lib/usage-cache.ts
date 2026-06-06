@@ -1,7 +1,7 @@
 export const USAGE_POLL_INTERVAL = 5 * 60 * 1000;
 export const USAGE_BACKOFF_INTERVAL = 10 * 60 * 1000;
-// v2: schema changed - resets_at can be null, new buckets added. Older caches are ignored.
-export const CACHE_KEY_CLAUDE = "korum-usage-claude-v2";
+// v3: extra_usage fields can be null, new cowork/omelette buckets added.
+export const CACHE_KEY_CLAUDE = "korum-usage-claude-v3";
 export const CACHE_KEY_CODEX = "korum-usage-codex";
 
 export interface CachedUsage<T> {
@@ -31,6 +31,7 @@ function readCacheEntry<T>(key: string): CachedUsage<T> | null {
 export function clearLegacyUsageCache(): void {
   try {
     localStorage.removeItem("korum-usage-claude");
+    localStorage.removeItem("korum-usage-claude-v2");
   } catch {
     // noop
   }

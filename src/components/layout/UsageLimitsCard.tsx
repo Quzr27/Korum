@@ -17,6 +17,7 @@ import {
   loadCached,
   saveCache,
 } from "@/lib/usage-cache";
+import { getExtraUsagePercent, hasClaudeUsage, isUsageRateLimited } from "@/lib/usage-limits";
 import type {
   ClaudeUsageResponse,
   CodexUsageResponse,
@@ -29,6 +30,7 @@ clearLegacyUsageCache();
 
 // Module-level state survives component remount (toggle off/on)
 let claudeBackoffUntil = 0;
+let codexBackoffUntil = 0;
 let fetchInFlight = false;
 
 function formatTimeUntil(isoString: string | null | undefined): string {
@@ -81,29 +83,35 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
   GBP: "£",
 };
 
-function formatCredits(value: number, currency: string): string {
-  const symbol = CURRENCY_SYMBOLS[currency] ?? currency;
+function formatCreditValue(value: number | null | undefined, currency: string | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  const symbol = currency ? CURRENCY_SYMBOLS[currency] ?? currency : "";
   return `${symbol}${value.toFixed(0)}`;
 }
 
 function ExtraUsageRow({ extra }: { extra: ExtraUsage }) {
-  const pct = Math.round(extra.utilization);
+  const pct = getExtraUsagePercent(extra);
+  const limit = typeof extra.monthly_limit === "number" && Number.isFinite(extra.monthly_limit)
+    ? formatCreditValue(extra.monthly_limit, extra.currency)
+    : "Unlimited";
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-baseline justify-between gap-2">
         <div className="flex min-w-0 items-baseline gap-1.5">
           <span className="truncate text-[11px] text-foreground/82">Credits</span>
           <span className="truncate text-[9px] text-muted-foreground/50">
-            {formatCredits(extra.used_credits, extra.currency)}
-            /{formatCredits(extra.monthly_limit, extra.currency)}
+            {formatCreditValue(extra.used_credits, extra.currency)}
+            /{limit}
           </span>
         </div>
-        <span className="shrink-0 tabular-nums text-[10px] text-foreground/68">{pct}%</span>
+        <span className="shrink-0 tabular-nums text-[10px] text-foreground/68">
+          {pct === null ? "-" : `${pct}%`}
+        </span>
       </div>
       <Progress
-        value={Math.min(pct, 100)}
+        value={pct === null ? 0 : Math.min(pct, 100)}
         className="h-1 bg-primary/10 dark:bg-primary/12 [&_[data-slot=progress-indicator]]:bg-primary/60 dark:[&_[data-slot=progress-indicator]]:bg-primary/45"
-        aria-label={`Credits ${pct}%`}
+        aria-label={pct === null ? "Credits" : `Credits ${pct}%`}
       />
     </div>
   );
@@ -115,10 +123,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
       {children}
     </span>
   );
-}
-
-function isRateLimited(error: unknown): boolean {
-  return typeof error === "string" && error.includes("RATE_LIMITED");
 }
 
 export default function UsageLimitsCard() {
@@ -147,16 +151,22 @@ export default function UsageLimitsCard() {
         const claudePromise = skipClaude
           ? Promise.resolve(null)
           : invoke<ClaudeUsageResponse>("fetch_claude_usage").catch((err: unknown) => {
-              if (isRateLimited(err)) {
+              if (isUsageRateLimited(err)) {
                 claudeBackoffUntil = Date.now() + USAGE_BACKOFF_INTERVAL;
               }
               return null;
             });
 
-        // Codex: skip if cache fresh
-        const codexPromise = isCacheFresh(CACHE_KEY_CODEX)
+        // Codex: skip if cache fresh OR in backoff window
+        const skipCodex = isCacheFresh(CACHE_KEY_CODEX) || now < codexBackoffUntil;
+        const codexPromise = skipCodex
           ? Promise.resolve(null)
-          : invoke<CodexUsageResponse>("fetch_codex_usage").catch(() => null);
+          : invoke<CodexUsageResponse>("fetch_codex_usage").catch((err: unknown) => {
+              if (isUsageRateLimited(err)) {
+                codexBackoffUntil = Date.now() + USAGE_BACKOFF_INTERVAL;
+              }
+              return null;
+            });
 
         const [claudeResult, codexResult] = await Promise.all([claudePromise, codexPromise]);
         if (!alive) return;
@@ -182,14 +192,7 @@ export default function UsageLimitsCard() {
     };
   }, [settings.showUsageLimits]);
 
-  const hasClaude =
-    claude !== null &&
-    (claude.five_hour !== null ||
-      claude.seven_day !== null ||
-      claude.seven_day_opus !== null ||
-      claude.seven_day_sonnet !== null ||
-      claude.seven_day_oauth_apps !== null ||
-      claude.extra_usage?.is_enabled === true);
+  const hasClaude = hasClaudeUsage(claude);
   const hasCodex = codex && (codex.primary_window ?? codex.secondary_window);
 
   if (!settings.showUsageLimits || (!hasClaude && !hasCodex)) return null;
@@ -202,7 +205,7 @@ export default function UsageLimitsCard() {
       className="glass-subtle fixed top-3 right-3 z-40 w-44 select-none border-none! gap-2.5 rounded-xl py-2.5 shadow-lg shadow-black/8"
     >
       <CardContent className="flex flex-col gap-2.5">
-        {hasClaude ? (
+        {hasClaude && claude ? (
           <div className="flex flex-col gap-2">
             <SectionLabel>Claude</SectionLabel>
             {claude.five_hour ? (
@@ -220,13 +223,19 @@ export default function UsageLimitsCard() {
             {claude.seven_day_oauth_apps ? (
               <UsageRow label="OAuth apps" bucket={claude.seven_day_oauth_apps} />
             ) : null}
+            {claude.seven_day_omelette ? (
+              <UsageRow label="Design" bucket={claude.seven_day_omelette} />
+            ) : null}
+            {claude.seven_day_cowork ? (
+              <UsageRow label="Cowork" bucket={claude.seven_day_cowork} />
+            ) : null}
             {claude.extra_usage?.is_enabled ? (
               <ExtraUsageRow extra={claude.extra_usage} />
             ) : null}
           </div>
         ) : null}
 
-        {hasClaude && hasCodex ? (
+        {hasClaude && claude && hasCodex ? (
           <Separator className="bg-border/45" />
         ) : null}
 

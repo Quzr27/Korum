@@ -23,6 +23,18 @@
   word-break: break-all;
 }
 
+.code-line-target {
+  background: color-mix(in oklch, var(--ws-accent) 18%, transparent);
+  outline: 1px solid color-mix(in oklch, var(--ws-accent) 42%, transparent);
+  outline-offset: -1px;
+}
+
+.code-line-target .code-gutter {
+  background: color-mix(in oklch, var(--ws-accent) 18%, transparent);
+  color: var(--ws-accent);
+  opacity: 1;
+}
+
 /* ── Diff mode ── */
 .diff-gutter-old {
   min-width: 32px;

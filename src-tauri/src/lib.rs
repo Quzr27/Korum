@@ -9,7 +9,7 @@ mod storage;
 use commands::{
     attach_terminal, confirm_app_exit, create_directory, create_file, create_terminal, delete_path,
     detach_terminal, fetch_claude_usage, fetch_codex_usage, get_file_diff, get_git_status,
-    kill_terminal, load_settings, load_state, read_code_file_content, read_directory,
+    kill_terminal, load_settings, load_state, open_external_url, read_code_file_content, read_directory,
     read_file_content, rename_path, resize_terminal, save_settings, save_state, start_watching,
     stop_watching, write_terminal,
 };
@@ -153,6 +153,7 @@ pub fn run() {
             write_terminal,
             resize_terminal,
             kill_terminal,
+            open_external_url,
             fetch_claude_usage,
             fetch_codex_usage,
             save_state,
