@@ -2,6 +2,7 @@ use crate::file_tree::FileWatcherState;
 use crate::pty::PtyState;
 use crate::quit_guard::QuitGuardState;
 use serde::Serialize;
+use std::process::Command;
 use tauri::ipc::Channel;
 use tauri::State;
 
@@ -55,6 +56,43 @@ pub fn resize_terminal(
 #[tauri::command]
 pub fn kill_terminal(state: State<'_, PtyState>, id: String) -> Result<(), String> {
     state.kill(&id)
+}
+
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if trimmed != url || trimmed.chars().any(|ch| ch.is_ascii_control() || ch.is_whitespace()) {
+        return Err("Invalid URL".to_string());
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err("Only http(s) URLs can be opened".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(trimmed);
+        command
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("rundll32");
+        command.arg("url.dll,FileProtocolHandler").arg(trimmed);
+        command
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(trimmed);
+        command
+    };
+
+    command.spawn().map_err(|err| format!("Failed to open URL: {err}"))?;
+    Ok(())
 }
 
 // ── Shell detection ──

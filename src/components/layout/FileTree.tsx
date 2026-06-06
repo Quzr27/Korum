@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { getFileIconName, GIT_STATUS_COLORS } from "@/lib/file-icons";
+import { getFileTreeRevealDirectories } from "@/lib/file-tree-reveal";
 import type { FileEntry, GitStatusResult } from "@/types";
 
 // ── Helpers ──
@@ -84,6 +85,7 @@ export default function FileTree({
   const [watcherError, setWatcherError] = useState(false);
   const mountedRef = useRef(true);
   const expandedPathsRef = useRef(expandedPaths);
+  const activeRowRef = useRef<HTMLButtonElement | null>(null);
   const validationMessageId = useId();
   expandedPathsRef.current = expandedPaths;
 
@@ -183,6 +185,30 @@ export default function FileTree({
     }
   }, [showIgnored, rootPath, fetchDirectory]);
 
+  useEffect(() => {
+    if (!activeFilePath) return;
+    const dirs = getFileTreeRevealDirectories(rootPath, activeFilePath);
+    if (dirs.length === 0) return;
+
+    setExpandedPaths((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const dir of dirs) {
+        if (!next.has(dir)) {
+          next.add(dir);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+
+    for (const dir of dirs) {
+      if (!entries.has(dir)) {
+        fetchDirectory(dir);
+      }
+    }
+  }, [activeFilePath, entries, fetchDirectory, rootPath]);
+
   // ── Expand/collapse ──
 
   const toggleExpand = useCallback(
@@ -247,6 +273,14 @@ export default function FileTree({
     buildFlatList(rootPath, 0);
     return rows;
   }, [entries, expandedPaths, query, rootPath]);
+
+  useEffect(() => {
+    if (!activeFilePath || !activeRowRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      activeRowRef.current?.scrollIntoView({ block: "center", inline: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeFilePath, flatRows]);
 
   // ── Git status for a path ──
 
@@ -465,6 +499,7 @@ export default function FileTree({
             <ContextMenu key={entry.path}>
               <ContextMenuTrigger asChild>
                 <button
+                  ref={isActiveFile ? activeRowRef : undefined}
                   type="button"
                   className={cn(
                     "flex w-full items-center gap-1.5 rounded-md py-0.5 text-left text-[11px] transition-colors",

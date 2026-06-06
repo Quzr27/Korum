@@ -9,23 +9,25 @@ Drag, resize, zoom — organize your workflow spatially instead of switching bet
 
 ![Korum with file tree, code viewer](screenshot-2.png)
 
-> **v0.2.2-alpha** — early release. macOS only for now.
+> **v0.3.0** — early release. macOS only for now.
 
 ## Status
 
-Korum is currently in early alpha. Right now, the focus is stability, persistence, and terminal UX on macOS.
+Korum is currently in early release. Right now, the focus is stability, persistence, and terminal UX on macOS.
 
 ## Features
 
 - Infinite pan & zoom canvas with terminal windows
 - Markdown notes alongside terminals
-- **File tree sidebar** — per-workspace file browser with .gitignore filtering, git status badges, context menu CRUD
-- **Code viewer** — read-only file viewer with Shiki syntax highlighting (16 themes), inline diff view, minimap
+- **Terminal Smart Links** — click http(s) URLs and local file paths from terminal output to open browser links or CodeWindows with line highlights
+- **File tree sidebar** — per-workspace file browser with .gitignore filtering, git status badges, context menu CRUD, active file reveal, and preserved file search
+- **Code viewer** — read-only file viewer with Shiki syntax highlighting (16 themes), inline diff view, minimap, auto-refresh, and terminal-link line targeting
+- **Magnetic pane snapping** — align terminals, notes, and code windows with zoom-stable guide lines
 - Workspaces backed by project folders or scratch spaces
 - Session persistence (positions, sizes, and content survive restarts)
-- Built for scale — viewport-aware rendering ensures only visible terminals consume resources
+- Built for scale — viewport-aware rendering keeps off-screen terminals, notes, and code windows lightweight
 - 25 terminal themes, 5 canvas atmospheres, customizable fonts, font sizes, and zoom speed
-- Claude Code & OpenAI Codex usage limits tracking (live OAuth polling)
+- Claude Code & OpenAI Codex usage limits tracking with session, weekly, model, credits, and rate-limit backoff handling
 
 ## Install
 

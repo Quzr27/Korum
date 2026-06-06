@@ -34,12 +34,17 @@ export interface CodeWindow extends BaseWindow {
   type: "code";
   sourcePath: string;
   viewMode: CodeViewMode;
+  targetLine?: number;
+  targetColumn?: number;
+  targetNonce?: number;
 }
 
 export type WindowState = TerminalWindow | NoteWindow | CodeWindow;
 
-/** Fields safe to mutate via drag/resize. */
-export type WindowUpdatable = Pick<BaseWindow, "x" | "y" | "width" | "height">;
+/** Fields safe to mutate from window components. */
+export type WindowUpdatable =
+  Pick<BaseWindow, "x" | "y" | "width" | "height"> &
+  Pick<CodeWindow, "targetLine" | "targetColumn" | "targetNonce">;
 
 /** Resize handle edge/corner directions. */
 export type ResizeEdge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -102,10 +107,11 @@ export interface UsageBucket {
 
 export interface ExtraUsage {
   is_enabled: boolean;
-  monthly_limit: number;
-  used_credits: number;
-  utilization: number;
-  currency: string;
+  monthly_limit: number | null;
+  used_credits: number | null;
+  utilization: number | null;
+  currency: string | null;
+  disabled_reason: string | null;
 }
 
 export interface ClaudeUsageResponse {
@@ -114,6 +120,8 @@ export interface ClaudeUsageResponse {
   seven_day_opus: UsageBucket | null;
   seven_day_sonnet: UsageBucket | null;
   seven_day_oauth_apps: UsageBucket | null;
+  seven_day_omelette: UsageBucket | null;
+  seven_day_cowork: UsageBucket | null;
   extra_usage: ExtraUsage | null;
   subscription_type: string | null;
   rate_limit_tier: string | null;

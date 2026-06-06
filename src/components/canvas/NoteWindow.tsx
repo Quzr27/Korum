@@ -9,6 +9,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useDragResize } from "@/lib/use-drag-resize";
+import type { SnapTargetRect } from "@/lib/window-snapping";
 import type { NoteWindow as NoteWindowState, WindowUpdatable } from "@/types";
 
 interface Props {
@@ -16,6 +17,8 @@ interface Props {
   window: NoteWindowState;
   isActive: boolean;
   zoomRef: React.RefObject<number>;
+  snapTargetsRef: React.RefObject<readonly SnapTargetRect[]>;
+  snapGuideLayerRef: React.RefObject<HTMLDivElement | null>;
   wsColor?: string;
   onClose: (id: string) => void;
   onUpdate: (id: string, updates: Partial<WindowUpdatable>) => void;
@@ -51,10 +54,10 @@ const SAFE_MD_COMPONENTS: Components = {
   },
 };
 
-export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, wsColor, onClose, onUpdate, onFocus, onRename, onContentChange }: Props) {
+export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, snapTargetsRef, snapGuideLayerRef, wsColor, onClose, onUpdate, onFocus, onRename, onContentChange }: Props) {
   const { windowRef, handleTitleMouseDown, handleEdgeResize } = useDragResize({
     id, x: win.x, y: win.y, width: win.width, height: win.height,
-    zoomRef, onUpdate, onFocus,
+    zoomRef, onUpdate, onFocus, snapTargetsRef, snapGuideLayerRef,
   });
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState("");
@@ -93,8 +96,6 @@ export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, ws
         onContentChange(id, localContentRef.current);
       }
     };
-    // onContentChange + id are stable (useCallback in App). localContentRef is a ref.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, onContentChange]);
 
   const hasContent = localContent.length > 0;

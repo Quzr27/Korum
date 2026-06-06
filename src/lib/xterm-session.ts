@@ -16,11 +16,19 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IBufferLine, type ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { TERMINAL_FONT_FAMILIES, TERMINAL_FONT_LOAD_TARGETS, getXtermTheme } from "@/lib/settings";
 import type { TerminalFont, TerminalTheme } from "@/lib/settings/types";
+import {
+  findTerminalDiagnosticLink,
+  findTerminalFileContext,
+  findTerminalSmartLinks,
+  mapTerminalLinkRange,
+  resolveTerminalFilePath,
+  type TerminalLinkSegment,
+} from "@/lib/terminal-smart-links";
 import { handleTerminalShortcut } from "@/lib/terminal-shortcuts";
 import { adjustMouseForZoom } from "@/lib/xterm-mouse-compat";
 import { useVisibility } from "@/lib/visibility-context";
@@ -29,6 +37,12 @@ import type { PasteRequest } from "@/types";
 const SNAPSHOT_SCROLLBACK_ROWS = 120;
 const LIVE_WRITE_REPAIR_IDLE_DELAY_MS = 180;
 const LIVE_WRITE_REPAIR_MAX_DELAY_MS = 1000;
+const ESLINT_CONTEXT_SCAN_LINES = 24;
+
+interface LogicalTerminalLine {
+  text: string;
+  segments: TerminalLinkSegment[];
+}
 
 function writeTerminalSnapshot(term: Terminal, snapshot: string): Promise<void> {
   return new Promise((resolve) => {
@@ -69,6 +83,94 @@ function refreshTerminalDisplay(
   });
 }
 
+function buildCellBoundaryMaps(line: IBufferLine, text: string, maxCols: number) {
+  const cellStartByIndex: number[] = [1];
+  const cellEndByIndex: number[] = [0];
+  let stringIndex = 0;
+
+  for (let cellIndex = 0; cellIndex < maxCols && stringIndex < text.length; cellIndex++) {
+    const cell = line.getCell(cellIndex);
+    if (!cell) break;
+
+    const width = cell.getWidth();
+    if (width === 0) continue;
+
+    const chars = cell.getChars();
+    const content = chars === "" ? " " : chars;
+    const cellStart = cellIndex + 1;
+    const cellEnd = cellIndex + Math.max(width, 1);
+    cellStartByIndex[stringIndex] = cellStart;
+
+    stringIndex += content.length;
+    cellEndByIndex[stringIndex] = cellEnd;
+    cellStartByIndex[stringIndex] = cellEnd + 1;
+  }
+
+  for (let i = 0; i <= text.length; i++) {
+    cellStartByIndex[i] ??= i + 1;
+    cellEndByIndex[i] ??= i;
+  }
+
+  return { cellStartByIndex, cellEndByIndex };
+}
+
+function readLogicalTerminalLine(term: Terminal, bufferLineNumber: number): LogicalTerminalLine | null {
+  const buffer = term.buffer.active;
+  let startLineIndex = bufferLineNumber - 1;
+  if (!buffer.getLine(startLineIndex)) return null;
+
+  while (startLineIndex > 0 && buffer.getLine(startLineIndex)?.isWrapped) {
+    startLineIndex -= 1;
+  }
+
+  let endLineIndex = startLineIndex;
+  while (endLineIndex + 1 < buffer.length && buffer.getLine(endLineIndex + 1)?.isWrapped) {
+    endLineIndex += 1;
+  }
+
+  let text = "";
+  const segments: TerminalLinkSegment[] = [];
+  for (let lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++) {
+    const line = buffer.getLine(lineIndex);
+    if (!line) return null;
+
+    const isLast = lineIndex === endLineIndex;
+    const chunk = line.translateToString(isLast, 0, term.cols);
+    const startIndex = text.length;
+    const cellMaps = buildCellBoundaryMaps(line, chunk, term.cols);
+    text += chunk;
+    segments.push({
+      bufferLineNumber: lineIndex + 1,
+      startIndex,
+      endIndex: text.length,
+      cellStartByIndex: cellMaps.cellStartByIndex,
+      cellEndByIndex: cellMaps.cellEndByIndex,
+    });
+  }
+
+  return { text, segments };
+}
+
+function findRecentTerminalFileContext(term: Terminal, beforeBufferLineNumber: number): string | null {
+  let cursor = beforeBufferLineNumber - 1;
+  let scanned = 0;
+
+  while (cursor >= 1 && scanned < ESLINT_CONTEXT_SCAN_LINES) {
+    const logicalLine = readLogicalTerminalLine(term, cursor);
+    if (!logicalLine) return null;
+
+    const context = findTerminalFileContext(logicalLine.text);
+    if (context) return context.path;
+
+    const firstSegment = logicalLine.segments[0];
+    if (!firstSegment) return null;
+    cursor = firstSegment.bufferLineNumber - 1;
+    scanned += logicalLine.segments.length;
+  }
+
+  return null;
+}
+
 export interface UseXtermSessionOptions {
   id: string;
   isPtyReady: boolean;
@@ -88,6 +190,8 @@ export interface UseXtermSessionOptions {
   flushPendingDispose: () => void;
   onSnapshotCaptured: (windowId: string, snapshot: string | null) => void;
   onPasteRequest: (request: PasteRequest) => void;
+  workspaceRoot?: string;
+  onOpenFileLink: (filePath: string, line: number, column?: number) => void;
   onSpawnError: (error: string) => void;
 }
 
@@ -117,14 +221,26 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     flushPendingDispose,
     onSnapshotCaptured,
     onPasteRequest,
+    workspaceRoot,
+    onOpenFileLink,
     onSpawnError,
   } = opts;
 
   const termInstanceRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [isSessionReady, setIsSessionReady] = useState(false);
+  const workspaceRootRef = useRef(workspaceRoot);
+  const onOpenFileLinkRef = useRef(onOpenFileLink);
 
   const { register: registerVisibility, unregister: unregisterVisibility } = useVisibility();
+
+  useEffect(() => {
+    workspaceRootRef.current = workspaceRoot;
+  }, [workspaceRoot]);
+
+  useEffect(() => {
+    onOpenFileLinkRef.current = onOpenFileLink;
+  }, [onOpenFileLink]);
 
   // ── Effect B: xterm + attach lifecycle ──
   useEffect(() => {
@@ -160,6 +276,61 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
 
     // Fit synchronously BEFORE anything else — ensures correct dimensions
     try { fitAddon.fit(); } catch { /* container not ready */ }
+
+    const linkProviderDisposable = term.registerLinkProvider({
+      provideLinks: (bufferLineNumber, callback) => {
+        const logicalLine = readLogicalTerminalLine(term, bufferLineNumber);
+        if (!logicalLine) {
+          callback(undefined);
+          return;
+        }
+
+        const links: ILink[] = [];
+        const smartLinks = findTerminalSmartLinks(logicalLine.text);
+        const firstSegment = logicalLine.segments[0];
+        const contextPath = firstSegment
+          ? findRecentTerminalFileContext(term, firstSegment.bufferLineNumber)
+          : null;
+        const diagnosticLink = contextPath
+          ? findTerminalDiagnosticLink(logicalLine.text, contextPath)
+          : null;
+        if (diagnosticLink) smartLinks.push(diagnosticLink);
+
+        for (const smartLink of smartLinks) {
+          if (smartLink.kind === "file" && !resolveTerminalFilePath(smartLink.path, workspaceRootRef.current)) {
+            continue;
+          }
+
+          const range = mapTerminalLinkRange(logicalLine.segments, smartLink.startIndex, smartLink.endIndex);
+          if (!range || bufferLineNumber < range.start.y || bufferLineNumber > range.end.y) {
+            continue;
+          }
+
+          links.push({
+            range,
+            text: smartLink.text,
+            decorations: {
+              pointerCursor: true,
+              underline: true,
+            },
+            activate: (event) => {
+              event.preventDefault();
+              if (smartLink.kind === "url") {
+                invoke("open_external_url", { url: smartLink.url }).catch(() => {});
+                return;
+              }
+
+              const filePath = resolveTerminalFilePath(smartLink.path, workspaceRootRef.current);
+              if (filePath) {
+                onOpenFileLinkRef.current(filePath, smartLink.line, smartLink.column);
+              }
+            },
+          });
+        }
+
+        callback(links.length > 0 ? links : undefined);
+      },
+    });
 
     let alive = true;
     let attached = false;
@@ -299,6 +470,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
         }
         invoke("detach_terminal", { id: ptyId }).catch(() => {});
       }
+      linkProviderDisposable.dispose();
       onDataDisposable.dispose();
       container.removeEventListener("mousedown", handleMouseZoom, true);
       container.removeEventListener("mousemove", handleMouseZoom, true);
@@ -321,7 +493,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
       }, 0);
       pendingDisposeRef.current = { term, timer };
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- settings handled by separate effect; terminalSnapshot captured at mount via snapshotAtMount; onPasteRequest/onSpawnError omitted — both are stable (useCallback with [] deps / useState setter)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- settings handled by separate effect; terminalSnapshot captured at mount via snapshotAtMount; link callbacks use refs to avoid remounting xterm; onPasteRequest/onSpawnError omitted — both are stable (useCallback with [] deps / useState setter)
   }, [flushPendingDispose, id, isPtyReady, onSnapshotCaptured, shouldAttach]);
 
   // Update terminal options when settings change

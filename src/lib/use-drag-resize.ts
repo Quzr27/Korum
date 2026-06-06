@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { WindowUpdatable, ResizeEdge } from "@/types";
+import {
+  snapDraggedWindow,
+  WINDOW_SNAP_THRESHOLD,
+  type SnapGuide,
+  type SnapTargetRect,
+} from "@/lib/window-snapping";
 
 interface UseDragResizeOptions {
   id: string;
@@ -12,6 +18,19 @@ interface UseDragResizeOptions {
   onFocus: (id: string) => void;
   minWidth?: number;
   minHeight?: number;
+  snapTargetsRef?: React.RefObject<readonly SnapTargetRect[]>;
+  snapGuideLayerRef?: React.RefObject<HTMLDivElement | null>;
+}
+
+interface DragState {
+  startX: number;
+  startY: number;
+  origX: number;
+  origY: number;
+  origW: number;
+  origH: number;
+  mode: "drag" | "resize";
+  edge?: ResizeEdge;
 }
 
 /**
@@ -35,23 +54,64 @@ export function useDragResize({
   onFocus,
   minWidth = 180,
   minHeight = 100,
+  snapTargetsRef,
+  snapGuideLayerRef,
 }: UseDragResizeOptions) {
   const windowRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{
-    startX: number;
-    startY: number;
-    origX: number;
-    origY: number;
-    origW: number;
-    origH: number;
-    mode: "drag" | "resize";
-    edge?: ResizeEdge;
-  } | null>(null);
+  const dragRef = useRef<DragState | null>(null);
   const listenersRef = useRef<{ move: (e: MouseEvent) => void; up: (e: MouseEvent) => void } | null>(null);
+  const guideNodesRef = useRef<HTMLDivElement[]>([]);
 
   // Keep latest values in refs so document listeners always see fresh values
   const stateRef = useRef({ x, y, width, height });
   stateRef.current = { x, y, width, height };
+  const emptySnapTargetsRef = useRef<readonly SnapTargetRect[]>([]);
+  const activeSnapTargetsRef = snapTargetsRef ?? emptySnapTargetsRef;
+
+  const clearSnapGuides = useCallback(() => {
+    for (const node of guideNodesRef.current) node.remove();
+    guideNodesRef.current = [];
+  }, []);
+
+  const renderSnapGuides = useCallback((guides: readonly SnapGuide[]) => {
+    const layer = snapGuideLayerRef?.current;
+    if (!layer || guides.length === 0) {
+      clearSnapGuides();
+      return;
+    }
+
+    const nodes = guideNodesRef.current;
+    while (nodes.length < guides.length) {
+      const node = document.createElement("div");
+      node.className = "canvas-snap-guide";
+      layer.appendChild(node);
+      nodes.push(node);
+    }
+
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      const guide = guides[i];
+      if (!guide) {
+        node.classList.remove("is-visible");
+        continue;
+      }
+
+      const length = Math.max(1, guide.end - guide.start);
+      node.dataset.axis = guide.axis;
+      if (guide.axis === "x") {
+        node.style.left = `${guide.position}px`;
+        node.style.top = `${guide.start}px`;
+        node.style.width = "0px";
+        node.style.height = `${length}px`;
+      } else {
+        node.style.left = `${guide.start}px`;
+        node.style.top = `${guide.position}px`;
+        node.style.width = `${length}px`;
+        node.style.height = "0px";
+      }
+      node.classList.add("is-visible");
+    }
+  }, [clearSnapGuides, snapGuideLayerRef]);
 
   // Clean up on unmount (close mid-drag)
   useEffect(() => {
@@ -61,8 +121,9 @@ export function useDragResize({
         document.removeEventListener("mouseup", listenersRef.current.up);
         listenersRef.current = null;
       }
+      clearSnapGuides();
     };
-  }, []);
+  }, [clearSnapGuides]);
 
   const handleTitleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -88,13 +149,28 @@ export function useDragResize({
       // Remove smooth-pan animation to prevent CSS transition during drag
       document.querySelector(".canvas-world")?.classList.remove("animating");
 
+      const getDragPosition = (d: DragState, ev: MouseEvent) => {
+        const zoom = zoomRef.current;
+        const dx = (ev.clientX - d.startX) / zoom;
+        const dy = (ev.clientY - d.startY) / zoom;
+        if (dx === 0 && dy === 0) {
+          return { x: d.origX, y: d.origY, rawDx: dx, rawDy: dy, guides: [] };
+        }
+        const snapped = snapDraggedWindow(
+          { id, x: d.origX + dx, y: d.origY + dy, width: d.origW, height: d.origH },
+          activeSnapTargetsRef.current,
+          WINDOW_SNAP_THRESHOLD / zoom,
+        );
+        return { ...snapped, rawDx: dx, rawDy: dy };
+      };
+
       // Use GPU-accelerated transform during drag (no layout thrash)
       const handleMove = (ev: MouseEvent) => {
         const d = dragRef.current;
         if (!d) return;
-        const dx = (ev.clientX - d.startX) / zoomRef.current;
-        const dy = (ev.clientY - d.startY) / zoomRef.current;
-        el.style.transform = `translate(${dx}px, ${dy}px)`;
+        const next = getDragPosition(d, ev);
+        el.style.transform = `translate(${next.x - d.origX}px, ${next.y - d.origY}px)`;
+        renderSnapGuides(next.guides);
       };
 
       const handleUp = (ev: MouseEvent) => {
@@ -106,12 +182,12 @@ export function useDragResize({
 
         if (!d) return;
         // Clear transform and commit final position
+        const next = getDragPosition(d, ev);
+        clearSnapGuides();
         el.style.transform = "";
-        const dx = (ev.clientX - d.startX) / zoomRef.current;
-        const dy = (ev.clientY - d.startY) / zoomRef.current;
-        const finalX = d.origX + dx;
-        const finalY = d.origY + dy;
-        if (dx !== 0 || dy !== 0) {
+        const finalX = next.x;
+        const finalY = next.y;
+        if (next.rawDx !== 0 || next.rawDy !== 0) {
           onUpdate(id, { x: finalX, y: finalY });
         }
       };
@@ -120,7 +196,7 @@ export function useDragResize({
       document.addEventListener("mousemove", handleMove);
       document.addEventListener("mouseup", handleUp);
     },
-    [id, zoomRef, onUpdate, onFocus],
+    [id, zoomRef, onUpdate, onFocus, renderSnapGuides, clearSnapGuides, activeSnapTargetsRef],
   );
 
   const handleEdgeResize = useCallback(

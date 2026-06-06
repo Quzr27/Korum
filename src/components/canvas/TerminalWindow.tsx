@@ -14,6 +14,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useDragResize } from "@/lib/use-drag-resize";
+import type { SnapTargetRect } from "@/lib/window-snapping";
 import type { TerminalWindow as TerminalWindowState, WindowUpdatable, PasteRequest } from "@/types";
 
 // Lighten/darken a hex color
@@ -50,8 +51,11 @@ interface Props {
   shouldAttach: boolean;
   terminalSnapshot?: string;
   zoomRef: React.RefObject<number>;
+  snapTargetsRef: React.RefObject<readonly SnapTargetRect[]>;
+  snapGuideLayerRef: React.RefObject<HTMLDivElement | null>;
   wsColor?: string;
   cwd?: string;
+  workspaceRoot?: string;
   onClose: (id: string) => void;
   onHydrationSettled: (id: string) => void;
   onPtySpawned: (windowId: string, ptyId: string | null) => void;
@@ -60,6 +64,7 @@ interface Props {
   onFocus: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onPasteRequest: (request: PasteRequest) => void;
+  onOpenFileLink: (workspaceId: string, filePath: string, line: number, column?: number) => void;
 }
 
 export default memo(function TerminalWindow({
@@ -70,8 +75,11 @@ export default memo(function TerminalWindow({
   shouldAttach,
   terminalSnapshot,
   zoomRef,
+  snapTargetsRef,
+  snapGuideLayerRef,
   wsColor,
   cwd,
+  workspaceRoot,
   onClose,
   onHydrationSettled,
   onPtySpawned,
@@ -80,11 +88,13 @@ export default memo(function TerminalWindow({
   onFocus,
   onRename,
   onPasteRequest,
+  onOpenFileLink,
 }: Props) {
   const { settings } = useSettings();
   const { windowRef, handleTitleMouseDown, handleEdgeResize } = useDragResize({
     id, x: win.x, y: win.y, width: win.width, height: win.height,
     zoomRef, onUpdate, onFocus, minWidth: 240, minHeight: 120,
+    snapTargetsRef, snapGuideLayerRef,
   });
   const termRef = useRef<HTMLDivElement>(null);
   const ptyIdRef = useRef<string | null>(null);
@@ -187,6 +197,10 @@ export default memo(function TerminalWindow({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- respawnTrigger forces re-spawn on reopen; cwdRef/onPtySpawned stable via refs
   }, [shouldHydrate, respawnTrigger]);
 
+  const handleOpenFileLink = useCallback((filePath: string, line: number, column?: number) => {
+    onOpenFileLink(win.workspaceId, filePath, line, column);
+  }, [onOpenFileLink, win.workspaceId]);
+
   // ── xterm session (Effect B + settings/focus/resize effects) ──
   const { termInstanceRef, isSessionReady } = useXtermSession({
     id,
@@ -207,6 +221,8 @@ export default memo(function TerminalWindow({
     flushPendingDispose,
     onSnapshotCaptured,
     onPasteRequest,
+    workspaceRoot,
+    onOpenFileLink: handleOpenFileLink,
     onSpawnError: setSpawnError,
   });
 

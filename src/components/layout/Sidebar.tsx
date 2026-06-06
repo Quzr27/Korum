@@ -72,6 +72,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { isPathInsideRoot } from "@/lib/file-tree-reveal";
 import { cn } from "@/lib/utils";
 import type { Workspace, WorkspaceColor, WorkspaceIconKey, WindowKind } from "@/types";
 import { WORKSPACE_COLORS } from "@/types";
@@ -607,6 +608,14 @@ export default function Sidebar({
 
   const activeRootPath = activeWs?.rootPath;
   const fileDrawerVisible = Boolean(activeRootPath && filePanelOpen);
+
+  useEffect(() => {
+    if (!activeWs || !activeRootPath || !activeFilePath) return;
+    if (!isPathInsideRoot(activeRootPath, activeFilePath)) return;
+    setFileDrawerOpenByWorkspaceId((prev) => (
+      prev[activeWs.id] ? prev : { ...prev, [activeWs.id]: true }
+    ));
+  }, [activeFilePath, activeRootPath, activeWs]);
 
   const updateActiveFileQuery = useCallback((value: string) => {
     if (!activeWs) return;

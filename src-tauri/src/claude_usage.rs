@@ -27,11 +27,18 @@ pub struct UsageBucket {
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct ExtraUsage {
+    #[serde(default)]
     pub is_enabled: bool,
-    pub monthly_limit: f64,
-    pub used_credits: f64,
-    pub utilization: f64,
-    pub currency: String,
+    #[serde(default)]
+    pub monthly_limit: Option<f64>,
+    #[serde(default)]
+    pub used_credits: Option<f64>,
+    #[serde(default)]
+    pub utilization: Option<f64>,
+    #[serde(default)]
+    pub currency: Option<String>,
+    #[serde(default)]
+    pub disabled_reason: Option<String>,
 }
 
 #[derive(Serialize, Default)]
@@ -41,6 +48,8 @@ pub struct UsageResponse {
     pub seven_day_opus: Option<UsageBucket>,
     pub seven_day_sonnet: Option<UsageBucket>,
     pub seven_day_oauth_apps: Option<UsageBucket>,
+    pub seven_day_omelette: Option<UsageBucket>,
+    pub seven_day_cowork: Option<UsageBucket>,
     pub extra_usage: Option<ExtraUsage>,
     pub subscription_type: Option<String>,
     pub rate_limit_tier: Option<String>,
@@ -83,6 +92,8 @@ struct ApiUsageResponse {
     seven_day_opus: Option<UsageBucket>,
     seven_day_sonnet: Option<UsageBucket>,
     seven_day_oauth_apps: Option<UsageBucket>,
+    seven_day_omelette: Option<UsageBucket>,
+    seven_day_cowork: Option<UsageBucket>,
     extra_usage: Option<ExtraUsage>,
 }
 
@@ -262,8 +273,49 @@ fn build_response(api: ApiUsageResponse, oauth: &OAuthCredentials) -> UsageRespo
         seven_day_opus: api.seven_day_opus,
         seven_day_sonnet: api.seven_day_sonnet,
         seven_day_oauth_apps: api.seven_day_oauth_apps,
+        seven_day_omelette: api.seven_day_omelette,
+        seven_day_cowork: api.seven_day_cowork,
         extra_usage: api.extra_usage,
         subscription_type: oauth.subscription_type.clone(),
         rate_limit_tier: oauth.rate_limit_tier.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApiUsageResponse;
+
+    #[test]
+    fn parses_usage_response_with_nullable_extra_usage_utilization() {
+        let raw = r#"{
+            "five_hour": { "utilization": 1.0, "resets_at": "2026-06-01T10:00:00+00:00" },
+            "seven_day": { "utilization": 24.0, "resets_at": "2026-06-07T10:00:00+00:00" },
+            "seven_day_oauth_apps": null,
+            "seven_day_opus": null,
+            "seven_day_sonnet": { "utilization": 1.0, "resets_at": "2026-06-07T10:00:00+00:00" },
+            "seven_day_cowork": null,
+            "seven_day_omelette": null,
+            "tangelo": null,
+            "iguana_necktie": null,
+            "omelette_promotional": null,
+            "extra_usage": {
+                "is_enabled": true,
+                "monthly_limit": 1000.0,
+                "used_credits": 152.0,
+                "utilization": null,
+                "currency": "EUR",
+                "disabled_reason": null
+            }
+        }"#;
+
+        let parsed = serde_json::from_str::<ApiUsageResponse>(raw)
+            .expect("usage response should allow nullable extra usage utilization");
+        let extra = parsed.extra_usage.expect("extra usage should parse");
+
+        assert_eq!(extra.utilization, None);
+        assert_eq!(extra.monthly_limit, Some(1000.0));
+        assert_eq!(extra.used_credits, Some(152.0));
+        assert!(parsed.seven_day_omelette.is_none());
+        assert!(parsed.seven_day_cowork.is_none());
     }
 }

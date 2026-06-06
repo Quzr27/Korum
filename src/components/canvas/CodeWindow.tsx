@@ -23,6 +23,8 @@ import { CODE_THEMES, CODE_THEME_LABELS, CODE_THEME_BG } from "@/lib/settings/ty
 import { tokenizeCode } from "@/lib/shiki";
 import { detectLanguage } from "@/lib/lang-detect";
 import { useDragResize } from "@/lib/use-drag-resize";
+import { shouldHandleCodeTarget } from "@/lib/code-window-target";
+import type { SnapTargetRect } from "@/lib/window-snapping";
 import type { CodeWindow as CodeWindowState, CodeViewMode, DiffLine, WindowUpdatable } from "@/types";
 import type { ThemedToken } from "shiki";
 
@@ -37,6 +39,8 @@ interface Props {
   window: CodeWindowState;
   isActive: boolean;
   zoomRef: React.RefObject<number>;
+  snapTargetsRef: React.RefObject<readonly SnapTargetRect[]>;
+  snapGuideLayerRef: React.RefObject<HTMLDivElement | null>;
   wsColor?: string;
   workspaceRoot?: string;
   onClose: (id: string) => void;
@@ -51,6 +55,8 @@ export default memo(function CodeWindow({
   window: win,
   isActive,
   zoomRef,
+  snapTargetsRef,
+  snapGuideLayerRef,
   wsColor,
   workspaceRoot,
   onClose,
@@ -65,6 +71,7 @@ export default memo(function CodeWindow({
   const { windowRef, handleTitleMouseDown, handleEdgeResize } = useDragResize({
     id, x: win.x, y: win.y, width: win.width, height: win.height,
     zoomRef, onUpdate, onFocus, minWidth: 240, minHeight: 120,
+    snapTargetsRef, snapGuideLayerRef,
   });
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState("");
@@ -81,27 +88,32 @@ export default memo(function CodeWindow({
   const sourcePathLabel = win.sourcePath.replace(/^\/Users\/[^/]+/, "~");
   const lang = useMemo(() => detectLanguage(win.sourcePath), [win.sourcePath]);
 
-  // Load file content from disk
-  useEffect(() => {
-    let cancelled = false;
+  const readContentForRequest = useCallback((thisRequest: number, isCancelled: () => boolean) => {
     setLoading(true);
     setError(null);
-    requestIdRef.current += 1;
-    const thisRequest = requestIdRef.current;
 
     invoke<string>("read_code_file_content", { path: win.sourcePath })
       .then((text) => {
-        if (!cancelled && requestIdRef.current === thisRequest) setContent(text);
+        if (!isCancelled() && requestIdRef.current === thisRequest) setContent(text);
       })
       .catch((err) => {
-        if (!cancelled && requestIdRef.current === thisRequest) setError(String(err));
+        if (!isCancelled() && requestIdRef.current === thisRequest) setError(String(err));
       })
       .finally(() => {
-        if (!cancelled && requestIdRef.current === thisRequest) setLoading(false);
+        if (!isCancelled() && requestIdRef.current === thisRequest) setLoading(false);
       });
+  }, [win.sourcePath]);
+
+  // Load file content from disk
+  useEffect(() => {
+    let cancelled = false;
+    requestIdRef.current += 1;
+    const thisRequest = requestIdRef.current;
+
+    readContentForRequest(thisRequest, () => cancelled);
 
     return () => { cancelled = true; };
-  }, [win.sourcePath]);
+  }, [readContentForRequest]);
 
   // Tokenize content with Shiki.
   // Debounce only content changes (rapid file-tree-changed events); theme/lang
@@ -155,9 +167,7 @@ export default memo(function CodeWindow({
       if (workspaceRoot && event.payload !== workspaceRoot) return;
       requestIdRef.current += 1;
       const thisRequest = requestIdRef.current;
-      invoke<string>("read_code_file_content", { path: win.sourcePath })
-        .then((text) => { if (!cancelled && requestIdRef.current === thisRequest) setContent(text); })
-        .catch(() => {/* file may have been deleted */});
+      readContentForRequest(thisRequest, () => cancelled);
 
       if (win.viewMode === "changes" && workspaceRoot) {
         invoke<DiffLine[]>("get_file_diff", { path: win.sourcePath, root: workspaceRoot })
@@ -173,7 +183,7 @@ export default memo(function CodeWindow({
       cancelled = true;
       unlistenFn?.();
     };
-  }, [win.sourcePath, win.viewMode, workspaceRoot]);
+  }, [readContentForRequest, win.sourcePath, win.viewMode, workspaceRoot]);
 
   const startRename = useCallback(() => {
     setRenameVal(win.title);
@@ -192,12 +202,15 @@ export default memo(function CodeWindow({
   const scrollRef = useRef<HTMLDivElement>(null);
   const minimapCanvasRef = useRef<HTMLCanvasElement>(null);
   const viewportRafRef = useRef(0);
+  const highlightTimerRef = useRef<number | null>(null);
+  const highlightedRowRef = useRef<HTMLTableRowElement | null>(null);
+  const lastHandledTargetNonceRef = useRef<number | null>(null);
 
   // ── Rendered content (rows only) ──
   const fileRows = useMemo(() => {
     if (tokens == null) return null;
     return tokens.map((lineTokens, i) => (
-      <tr key={i} className="code-line">
+      <tr key={i} className="code-line" data-line={i + 1}>
         <td className="code-gutter">{i + 1}</td>
         <td className="code-cell">
           {lineTokens.map((token, j) => (
@@ -413,6 +426,61 @@ export default memo(function CodeWindow({
     indicator.style.top = `${scrollTop * ratio}px`;
     indicator.style.height = `${Math.max(clientHeight * ratio, 8)}px`;
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+      highlightedRowRef.current?.classList.remove("code-line-target");
+      highlightedRowRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const line = win.targetLine;
+    const nonce = win.targetNonce;
+    if (!shouldHandleCodeTarget({
+      line,
+      nonce,
+      viewMode: win.viewMode,
+      tokensReady: tokens != null,
+      lastHandledNonce: lastHandledTargetNonceRef.current,
+    })) return;
+
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+
+    const row = scroller.querySelector<HTMLTableRowElement>(`tr[data-line="${line}"]`);
+    if (!row) {
+      lastHandledTargetNonceRef.current = nonce ?? null;
+      onUpdate(id, { targetLine: undefined, targetColumn: undefined, targetNonce: undefined });
+      return;
+    }
+
+    const raf = requestAnimationFrame(() => {
+      lastHandledTargetNonceRef.current = nonce ?? null;
+      onUpdate(id, { targetLine: undefined, targetColumn: undefined, targetNonce: undefined });
+      row.scrollIntoView({ block: "center", inline: "nearest" });
+      updateMinimapViewport();
+      highlightedRowRef.current?.classList.remove("code-line-target");
+      row.classList.add("code-line-target");
+      highlightedRowRef.current = row;
+
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+      highlightTimerRef.current = window.setTimeout(() => {
+        if (highlightedRowRef.current === row) {
+          row.classList.remove("code-line-target");
+          highlightedRowRef.current = null;
+        }
+        highlightTimerRef.current = null;
+      }, 2600);
+    });
+
+    return () => cancelAnimationFrame(raf);
+  }, [id, onUpdate, tokens, updateMinimapViewport, win.targetLine, win.targetNonce, win.viewMode]);
 
   useEffect(() => {
     const scroller = scrollRef.current;
