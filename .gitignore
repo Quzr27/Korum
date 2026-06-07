@@ -37,9 +37,13 @@ skills-lock.json
 .agents/
 AGENTS.md
 
+# Landing page (separate static site with independent release copy)
+LP/
+
 # CodeGraph (local code-intelligence index)
 .codegraph/
 .mcp.json
 
 # Logs
 *.log
+bun

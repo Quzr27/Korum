@@ -20,6 +20,11 @@ import {
   getAgentMinimapPaint,
 } from "@/lib/agent-status";
 import {
+  getAgentStatusMap,
+  mergeAgentStatusesIntoStore,
+  removeAgentStatusFromStore,
+} from "@/lib/agent-status-store";
+import {
   buildTerminalHydrationQueue,
   collectTerminalIds,
   TERMINAL_HYDRATION_CONCURRENCY,
@@ -107,7 +112,6 @@ export default function App() {
   const hydratedTerminalIdsRef = useRef(new Set<string>());
   const bootingTerminalIdsRef = useRef(new Set<string>());
   const terminalSnapshotsRef = useRef<Record<string, string>>({});
-  const agentStatusesRef = useRef<Map<string, AgentStatus>>(new Map());
   const codeTargetNonceRef = useRef(0);
   const gitFileStatusRequestsRef = useRef<Map<string, Promise<GitFileStatus | null>>>(new Map());
   const openFileRequestsRef = useRef<Set<string>>(new Set());
@@ -124,7 +128,7 @@ export default function App() {
   const confirmedExitRef = useRef(false);
 
   const applyAgentStatusesToDom = useCallback(() => {
-    const statuses = agentStatusesRef.current;
+    const statuses = getAgentStatusMap();
     const terminalIds = new Set(
       stateRef.current.windows
         .filter((window) => window.type === "terminal")
@@ -182,14 +186,12 @@ export default function App() {
   }, []);
 
   const mergeAgentStatuses = useCallback((statuses: AgentStatus[]) => {
-    for (const status of statuses) {
-      agentStatusesRef.current.set(status.terminalId, status);
-    }
+    mergeAgentStatusesIntoStore(statuses);
     applyAgentStatusesToDom();
   }, [applyAgentStatusesToDom]);
 
   const clearAgentStatus = useCallback((terminalId: string) => {
-    agentStatusesRef.current.delete(terminalId);
+    removeAgentStatusFromStore(terminalId);
     applyAgentStatusesToDom();
   }, [applyAgentStatusesToDom]);
 
@@ -291,6 +293,7 @@ export default function App() {
       });
 
     listen<AgentStatus[]>(AGENT_STATUS_CHANGED_EVENT, (event) => {
+      if (!alive) return;
       mergeAgentStatuses(event.payload);
     }).then((fn) => {
       if (alive) {
