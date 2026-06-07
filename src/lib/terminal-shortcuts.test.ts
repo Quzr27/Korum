@@ -102,6 +102,7 @@ describe("handleTerminalShortcut", () => {
       { key: "W", metaKey: true, shiftKey: true, desc: "Cmd+Shift+W (new workspace)" },
       { key: "?", metaKey: true, shiftKey: true, desc: "Cmd+Shift+? (shortcuts)" },
       { key: "A", metaKey: true, shiftKey: true, desc: "Cmd+Shift+A (arrange)" },
+      { key: "M", metaKey: true, shiftKey: true, desc: "Cmd+Shift+M (war-room)" },
     ])("blocks $desc so it bubbles to document", ({ desc: _, ...init }) => {
       const context = makeContext();
       const result = handleTerminalShortcut(
@@ -117,6 +118,7 @@ describe("handleTerminalShortcut", () => {
       { key: "W", metaKey: true, shiftKey: true, desc: "Cmd+Shift+W" },
       { key: "?", metaKey: true, shiftKey: true, desc: "Cmd+Shift+?" },
       { key: "A", metaKey: true, shiftKey: true, desc: "Cmd+Shift+A" },
+      { key: "M", metaKey: true, shiftKey: true, desc: "Cmd+Shift+M" },
     ])("blocks keyup for $desc to prevent xterm leak", ({ desc: _, ...init }) => {
       const context = makeContext();
       const result = handleTerminalShortcut(

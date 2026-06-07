@@ -36,6 +36,39 @@ body,
   border: 1px solid var(--border);
 }
 
+:root {
+  --app-chrome-inset: 0.75rem;
+  /* Header band that hosts the native macOS traffic lights. Panels anchor at the
+     same inset top and bottom, so the chrome reads as vertically balanced. */
+  --app-titlebar-band: 3rem;
+  /* The window-drag strip only needs to cover the traffic-light row; keeping it
+     short minimises the slice of canvas it occludes. Keep in sync with
+     TITLEBAR_DRAG_HEIGHT in App.tsx. */
+  --app-titlebar-drag-height: 2.5rem;
+  --app-chrome-top: var(--app-chrome-inset);
+  --app-chrome-bottom: var(--app-chrome-inset);
+}
+
+.app-chrome-top {
+  top: var(--app-chrome-top);
+}
+
+.app-settings-panel {
+  top: var(--app-chrome-top);
+  bottom: var(--app-chrome-bottom);
+}
+
+.app-titlebar-drag-region {
+  position: fixed;
+  inset: 0 0 auto 0;
+  /* Below the side panels (z-40) so their in-band header buttons stay clickable,
+     above the canvas so the top strip still drags the window. Kept short so it
+     occludes as little canvas (and as few window titlebars) as possible. */
+  z-index: 30;
+  height: var(--app-titlebar-drag-height);
+  pointer-events: auto;
+}
+
 .sidebar-file-drawer {
   transform-origin: left center;
   will-change: transform, opacity, clip-path, filter;
@@ -228,6 +261,20 @@ body,
   --agent-status-unknown: color-mix(in oklch, var(--muted-foreground) 60%, transparent);
   --agent-status-unknown-strong: color-mix(in oklch, var(--muted-foreground) 80%, transparent);
   --agent-status-unknown-halo: color-mix(in oklch, var(--muted-foreground) 10%, transparent);
+  --agent-war-room-working-ring: var(--agent-status-working);
+  --agent-war-room-working-ring-strong: var(--agent-status-working-strong);
+  --agent-war-room-working-halo: color-mix(in oklch, var(--agent-status-working) 42%, transparent);
+  --agent-war-room-waiting-ring: var(--agent-status-waiting);
+  --agent-war-room-waiting-ring-strong: var(--agent-status-waiting-strong);
+  --agent-war-room-waiting-halo: color-mix(in oklch, var(--agent-status-waiting) 62%, transparent);
+  --agent-war-room-waiting-flare: color-mix(in oklch, var(--agent-status-waiting-strong) 76%, transparent);
+  --war-room-canvas-top: color-mix(in oklch, var(--background) 84%, black 16%);
+  --war-room-canvas-bottom: color-mix(in oklch, var(--background) 64%, black 36%);
+  --war-room-canvas-glow-1: color-mix(in oklch, var(--primary) 16%, transparent);
+  --war-room-canvas-glow-2: color-mix(in oklch, var(--accent) 18%, transparent);
+  --war-room-canvas-glow-3: color-mix(in oklch, var(--sidebar-primary) 12%, transparent);
+  --war-room-canvas-mesh: radial-gradient(circle at 16% 18%, color-mix(in oklch, var(--primary) 14%, transparent) 0%, transparent 34%), radial-gradient(circle at 84% 22%, color-mix(in oklch, var(--accent) 16%, transparent) 0%, transparent 32%), radial-gradient(circle at 50% 105%, color-mix(in oklch, var(--sidebar-primary) 12%, transparent) 0%, transparent 48%);
+  --war-room-canvas-vignette: radial-gradient(circle at center, transparent 30%, color-mix(in oklch, black 32%, transparent) 100%);
 }
 
 .dark {

@@ -16,6 +16,15 @@ const ACTIVITY_STRONG_CSS_VARS: Record<AgentActivity, string> = {
   unknown: "var(--agent-status-unknown-strong)",
 };
 
+const WAR_ROOM_PULSE_CLASS_BY_ACTIVITY: Record<AgentActivity, string> = {
+  working: "agent-war-room-pulse--working",
+  waiting: "agent-war-room-pulse--waiting",
+  idle: "",
+  unknown: "",
+};
+
+export const AGENT_WAR_ROOM_PULSE_CLASSES = Object.values(WAR_ROOM_PULSE_CLASS_BY_ACTIVITY).filter(Boolean);
+
 export function getAgentActivityDataValue(status: AgentStatus | undefined): AgentActivity {
   return status?.activity ?? "unknown";
 }
@@ -34,4 +43,8 @@ export function getAgentMinimapPaint(status: AgentStatus | undefined): { fill: s
     fill: getAgentActivityCssVar(activity),
     stroke: getAgentActivityStrongCssVar(activity),
   };
+}
+
+export function getAgentWarRoomPulseClass(activity: AgentActivity | undefined): string {
+  return WAR_ROOM_PULSE_CLASS_BY_ACTIVITY[activity ?? "unknown"];
 }

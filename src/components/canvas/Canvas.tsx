@@ -690,7 +690,7 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
   return (
     <button
       type="button"
-      className="glass-subtle fixed bottom-12 right-3 z-40 h-[100px] w-[160px] cursor-crosshair rounded-xl focus-visible:ring-2 focus-visible:ring-ring/35"
+      className="canvas-minimap glass-subtle fixed bottom-12 right-3 z-40 h-[100px] w-[160px] cursor-crosshair rounded-xl focus-visible:ring-2 focus-visible:ring-ring/35"
       onClick={handleClick}
       aria-label="Navigate canvas minimap"
     >

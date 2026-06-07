@@ -15,9 +15,11 @@ import { persistState, loadPersistedState } from "@/lib/persistence";
 import { DEFAULT_VIEWPORT, hydratePersistedState } from "@/lib/persisted-state";
 import { stripSessionWindowFields } from "@/lib/window-persistence";
 import {
+  AGENT_WAR_ROOM_PULSE_CLASSES,
   AGENT_STATUS_CHANGED_EVENT,
   getAgentActivityDataValue,
   getAgentMinimapPaint,
+  getAgentWarRoomPulseClass,
 } from "@/lib/agent-status";
 import {
   getAgentStatusMap,
@@ -34,6 +36,8 @@ import { placeAdjacentWindow } from "@/lib/window-placement";
 import { isWindowInViewport } from "@/lib/viewport";
 import { WINDOW_GRID_GAP } from "@/lib/window-snapping";
 import { confirmAppQuit, QUIT_REQUESTED_EVENT } from "@/lib/quit-guard";
+import { isWarRoomModalGuardActive, shouldToggleWarRoomShortcut } from "@/lib/war-room-shortcuts";
+import { startWindowDragFromMouseDown } from "@/lib/window-drag";
 import type { PersistedState, ViewportState } from "@/lib/persistence";
 import type { AgentStatus, WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest, CodeViewMode, GitFileStatus } from "@/types";
 
@@ -51,8 +55,9 @@ interface CodeOpenTarget {
   originTerminalId?: string;
 }
 
-const SIDEBAR_RIGHT_EDGE = 288 + 12 + 24; // w-72 (288px) + left-3 (12px) + gap (24px)
-const GRID_TOP = 13; // align with sidebar top-3 (13px)
+const SIDEBAR_RIGHT_EDGE = 288 + 24; // w-72 (288px) docked at left-0 + gap (24px)
+const TITLEBAR_DRAG_HEIGHT = 40; // keep in sync with --app-titlebar-drag-height in app.css
+const GRID_TOP = TITLEBAR_DRAG_HEIGHT + 4; // keep arranged windows just below the top drag strip
 const CODE_WINDOW_WIDTH = 820;
 const CODE_WINDOW_HEIGHT = 600;
 
@@ -88,6 +93,8 @@ export default function App() {
   const [quitDialogOpen, setQuitDialogOpen] = useState(false);
   const [isQuitting, setIsQuitting] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [isWarRoom, setIsWarRoom] = useState(false);
+  const [sidebarModalOpen, setSidebarModalOpen] = useState(false);
   const [settingsDismissVersion, setSettingsDismissVersion] = useState(0);
   const [pasteConfirmState, setPasteConfirmState] = useState<PasteRequest | null>(null);
   const hasWorkspaces = workspaces.length > 0;
@@ -140,12 +147,21 @@ export default function App() {
       if (!terminalId || !terminalIds.has(terminalId)) {
         delete node.dataset.agentActivity;
         delete node.dataset.agentKind;
+        node.classList.remove(...AGENT_WAR_ROOM_PULSE_CLASSES);
         return;
       }
 
       const status = statuses.get(terminalId);
-      node.dataset.agentActivity = getAgentActivityDataValue(status);
+      const activity = getAgentActivityDataValue(status);
+      const pulseClass = getAgentWarRoomPulseClass(activity);
+      node.dataset.agentActivity = activity;
       node.dataset.agentKind = status?.kind ?? "unknown";
+      // Only mutate the pulse class when it actually changes, so the one-shot
+      // war-room "waiting settle" animation isn't restarted on every pan/zoom/window update.
+      for (const cls of AGENT_WAR_ROOM_PULSE_CLASSES) {
+        if (cls !== pulseClass) node.classList.remove(cls);
+      }
+      if (pulseClass) node.classList.add(pulseClass);
     });
 
     document.querySelectorAll<SVGRectElement>("rect[data-minimap-window-id]").forEach((node) => {
@@ -981,12 +997,27 @@ export default function App() {
 
   // ── Global keyboard shortcuts ──
   const modalOpenRef = useRef(false);
-  modalOpenRef.current = quitDialogOpen || shortcutsOpen || createDialogOpen || pasteConfirmState !== null;
+  modalOpenRef.current = isWarRoomModalGuardActive({
+    quitDialogOpen,
+    shortcutsOpen,
+    createDialogOpen,
+    pasteConfirmOpen: pasteConfirmState !== null,
+    sidebarModalOpen,
+  });
   const shortcutsOpenRef = useRef(false);
   shortcutsOpenRef.current = shortcutsOpen;
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey;
+
+      // Cmd/Ctrl+Shift+M — toggle war-room focus mode.
+      if (shouldToggleWarRoomShortcut(e, modalOpenRef.current)) {
+        e.preventDefault();
+        // War-room is meaningless with no workspaces (no agents to focus), so only
+        // allow exiting it then — never enter onto a blank canvas.
+        setIsWarRoom((prev) => (prev ? false : stateRef.current.workspaces.length > 0));
+        return;
+      }
 
       // Block all shortcuts when any modal is open (except closing shortcuts itself)
       if (modalOpenRef.current) {
@@ -1076,7 +1107,14 @@ export default function App() {
   }
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden">
+    <div className={`relative h-screen w-screen overflow-hidden${isWarRoom ? " war-room" : ""}`}>
+      <div
+        className="app-titlebar-drag-region"
+        data-tauri-drag-region
+        aria-hidden="true"
+        onMouseDown={startWindowDragFromMouseDown}
+      />
+
       <Canvas
         windows={windows}
         workspaces={workspaces}
@@ -1108,22 +1146,29 @@ export default function App() {
       />
 
       {hasWorkspaces ? (
-        <Sidebar
-          windows={sidebarWindows}
-          workspaces={workspaces}
-          activeWorkspaceId={activeWorkspaceId}
-          activeWindowId={activeWindowId}
-          onCreateDialogChange={setCreateDialogOpen}
-          onFocusWindow={focusWindowFromSidebar}
-          onAddNote={() => addWindow("note")}
-          onSelectWorkspace={switchWorkspace}
-          onUpdateWorkspace={updateWorkspace}
-          onDeleteWorkspace={deleteWorkspace}
-          onArrangeWindows={arrangeWindows}
-          onRenameWindow={renameWindow}
-          onRemoveWindow={removeWindow}
-          onOpenFile={openFile}
-        />
+        <div
+          aria-hidden={isWarRoom}
+          inert={isWarRoom}
+          className={isWarRoom ? "pointer-events-none opacity-0" : "opacity-100"}
+        >
+          <Sidebar
+            windows={sidebarWindows}
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            activeWindowId={activeWindowId}
+            onCreateDialogChange={setCreateDialogOpen}
+            onModalOpenChange={setSidebarModalOpen}
+            onFocusWindow={focusWindowFromSidebar}
+            onAddNote={() => addWindow("note")}
+            onSelectWorkspace={switchWorkspace}
+            onUpdateWorkspace={updateWorkspace}
+            onDeleteWorkspace={deleteWorkspace}
+            onArrangeWindows={arrangeWindows}
+            onRenameWindow={renameWindow}
+            onRemoveWindow={removeWindow}
+            onOpenFile={openFile}
+          />
+        </div>
       ) : null}
 
       {hasWorkspaces ? null : (
@@ -1155,10 +1200,22 @@ export default function App() {
         onOpenChange={setShortcutsOpen}
       />
 
-      {hasWorkspaces ? <UsageLimitsCard /> : null}
+      {hasWorkspaces ? (
+        <div
+          aria-hidden={isWarRoom}
+          inert={isWarRoom}
+          className={isWarRoom ? "pointer-events-none opacity-0" : "opacity-100"}
+        >
+          <UsageLimitsCard />
+        </div>
+      ) : null}
 
       {hasWorkspaces ? (
-        <div className="fixed bottom-3 right-3 z-40 grid w-40 grid-cols-3 gap-1">
+        <div
+          aria-hidden={isWarRoom}
+          inert={isWarRoom}
+          className={`fixed bottom-3 right-3 z-40 grid w-40 grid-cols-3 gap-1 ${isWarRoom ? "pointer-events-none opacity-0" : "opacity-100"}`}
+        >
           <ZoomSpeedControl />
           <SettingsPanel dismissVersion={settingsDismissVersion} />
           <button
