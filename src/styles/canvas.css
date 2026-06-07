@@ -11,6 +11,19 @@
   cursor: grabbing;
 }
 
+.war-room {
+  --canvas-top: var(--war-room-canvas-top);
+  --canvas-bottom: var(--war-room-canvas-bottom);
+  --canvas-glow-1: var(--war-room-canvas-glow-1);
+  --canvas-glow-2: var(--war-room-canvas-glow-2);
+  --canvas-glow-3: var(--war-room-canvas-glow-3);
+  --canvas-mesh: var(--war-room-canvas-mesh);
+  --canvas-mesh-opacity: 0.74;
+  --canvas-grid-opacity: 0.09;
+  --canvas-vignette: var(--war-room-canvas-vignette);
+  --canvas-blur: 150px;
+}
+
 
 .canvas-world {
   position: absolute;
@@ -158,4 +171,24 @@
   z-index: 1;
   opacity: var(--canvas-grid-opacity);
   pointer-events: none;
+}
+
+.canvas-minimap {
+  transition:
+    right 0.2s ease,
+    bottom 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease;
+}
+
+.war-room .canvas-minimap {
+  right: 0.75rem;
+  bottom: 0.75rem;
+  background: color-mix(in oklch, var(--card) 46%, transparent);
+  border-color: color-mix(in oklch, var(--agent-status-working) 34%, var(--border));
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--agent-status-working) 22%, transparent),
+    0 0 30px color-mix(in oklch, var(--agent-status-working) 12%, transparent),
+    0 10px 34px rgba(0, 0, 0, 0.22);
 }

@@ -3,6 +3,7 @@ import {
   getAgentActivityCssVar,
   getAgentActivityDataValue,
   getAgentMinimapPaint,
+  getAgentWarRoomPulseClass,
 } from "@/lib/agent-status";
 import type { AgentStatus } from "@/types";
 
@@ -39,5 +40,13 @@ describe("agent status presentation", () => {
       fill: "var(--agent-status-working)",
       stroke: "var(--agent-status-working-strong)",
     });
+  });
+
+  it("maps activities to war-room pulse classes", () => {
+    expect(getAgentWarRoomPulseClass("working")).toBe("agent-war-room-pulse--working");
+    expect(getAgentWarRoomPulseClass("waiting")).toBe("agent-war-room-pulse--waiting");
+    expect(getAgentWarRoomPulseClass("idle")).toBe("");
+    expect(getAgentWarRoomPulseClass("unknown")).toBe("");
+    expect(getAgentWarRoomPulseClass(undefined)).toBe("");
   });
 });

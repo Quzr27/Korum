@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { startWindowDragFromMouseDown } from "@/lib/window-drag";
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 import {
   ArrowRight01Icon,
@@ -34,6 +36,7 @@ import {
   GridViewIcon,
   EyeIcon,
   ViewOffSlashIcon,
+  PanelLeftIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -512,6 +515,7 @@ interface SidebarProps {
   activeWorkspaceId: string | null;
   activeWindowId: string | null;
   onCreateDialogChange: (open: boolean) => void;
+  onModalOpenChange?: (open: boolean) => void;
   onFocusWindow: (id: string) => void;
   onAddNote: () => void;
   onSelectWorkspace: (id: string) => void;
@@ -526,6 +530,7 @@ interface SidebarProps {
 export default function Sidebar({
   windows, workspaces, activeWorkspaceId, activeWindowId,
   onCreateDialogChange,
+  onModalOpenChange,
   onFocusWindow, onAddNote, onSelectWorkspace,
   onUpdateWorkspace, onDeleteWorkspace,
   onArrangeWindows, onRenameWindow, onRemoveWindow,
@@ -560,6 +565,8 @@ export default function Sidebar({
   const activeWorkspaceFileQuery = activeWs ? (fileQueryByWorkspaceId[activeWs.id] ?? "") : "";
   const filePanelOpen = !!(activeWs?.rootPath && fileDrawerOpenByWorkspaceId[activeWs.id]);
   const showIgnored = !!(activeWs && showIgnoredByWorkspaceId[activeWs.id]);
+  const fileDrawerVisible = Boolean(activeWs?.rootPath && filePanelOpen);
+  const sidebarDrawerOpen = !collapsed && fileDrawerVisible;
   const activeFilePath = useMemo(() => {
     const activeWindow = windows.find((w) => w.id === activeWindowId);
     if (activeWindow?.type === "code") return activeWindow.sourcePath;
@@ -580,6 +587,14 @@ export default function Sidebar({
   useEffect(() => {
     writeSidebarUiState({ fileDrawerOpenByWorkspaceId, fileQueryByWorkspaceId, showIgnoredByWorkspaceId });
   }, [fileDrawerOpenByWorkspaceId, fileQueryByWorkspaceId, showIgnoredByWorkspaceId]);
+
+  const localModalOpen = editWorkspace !== null || deleteTarget !== null;
+  useEffect(() => {
+    onModalOpenChange?.(localModalOpen);
+    return () => {
+      if (localModalOpen) onModalOpenChange?.(false);
+    };
+  }, [localModalOpen, onModalOpenChange]);
 
   const openEdit = useCallback((ws: Workspace) => {
     setEditWorkspace(ws);
@@ -647,7 +662,6 @@ export default function Sidebar({
   }, [activeWs]);
 
   const activeRootPath = activeWs?.rootPath;
-  const fileDrawerVisible = Boolean(activeRootPath && filePanelOpen);
 
   useEffect(() => {
     if (!activeWs || !activeRootPath || !activeFilePath) return;
@@ -668,44 +682,50 @@ export default function Sidebar({
     });
   }, [activeWs]);
 
-  if (collapsed) {
-    return (
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-lg"
-        className="glass fixed left-3 top-3 z-40 rounded-xl text-muted-foreground"
-        onClick={() => setCollapsed(false)}
-        aria-label="Open sidebar"
-      >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path d="M3 4h10M3 8h10M3 12h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-        </svg>
-      </Button>
-    );
-  }
+  // Let the user drag the window by grabbing the empty area of the title band,
+  // while leaving its buttons/inputs clickable.
+  const handleTitlebarDrag = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => startWindowDragFromMouseDown(event, { guardInteractive: true }),
+    [],
+  );
 
   return (
     <>
-      <aside className={cn(
-        "glass fixed left-3 top-3 bottom-3 z-40 w-72 flex flex-col shadow-2xl shadow-black/25 overflow-hidden",
-        fileDrawerVisible ? "rounded-l-xl rounded-r-none border-r-0" : "rounded-xl",
-      )}>
-        {/* Header */}
-        <div className="px-3 pt-3 pb-1.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="text-muted-foreground"
-            onClick={() => setCollapsed(true)}
-            aria-label="Collapse sidebar"
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M3 4h10M3 8h10M3 12h10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-            </svg>
-          </Button>
-        </div>
+      {/* Sidebar toggle — pinned next to the macOS traffic lights; stays visible even when the whole sidebar is closed.
+          left/top tuned visually to sit on the traffic-light row. */}
+      <div className="fixed left-[76px] top-[6px] z-50">
+
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="text-muted-foreground"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-label={collapsed ? "Open sidebar" : "Collapse sidebar"}
+        >
+          <HugeiconsIcon icon={PanelLeftIcon} size={16} />
+        </Button>
+      </div>
+
+      <aside
+        aria-hidden={collapsed}
+        inert={collapsed}
+        className={cn(
+          "glass fixed inset-y-0 left-0 z-40 w-72 flex flex-col shadow-2xl shadow-black/25 overflow-hidden",
+          "transition-transform duration-300 ease-out will-change-transform",
+          sidebarDrawerOpen ? "rounded-r-none" : "rounded-r-xl",
+          collapsed ? "pointer-events-none -translate-x-[calc(100%+0.75rem)]" : "translate-x-0",
+        )}
+        style={sidebarDrawerOpen
+          ? { borderWidth: 0 }
+          : { borderTopWidth: 0, borderBottomWidth: 0, borderLeftWidth: 0 }}
+      >
+        {/* Title band — flush top; empty drag strip, top-left reserved for the traffic lights + toggle */}
+        <div
+          className="shrink-0"
+          style={{ height: "var(--app-titlebar-band)" }}
+          onMouseDown={handleTitlebarDrag}
+        />
 
         {/* Filter */}
         <div className="px-3 pb-2">
@@ -967,20 +987,33 @@ export default function Sidebar({
       </aside>
 
       {/* File tree drawer — docked to sidebar right edge */}
-      {fileDrawerVisible && activeWs && activeRootPath && (
+      {activeWs && activeRootPath && (
         <aside
-          data-state="open"
+          data-state={sidebarDrawerOpen ? "open" : "closed"}
+          aria-hidden={!sidebarDrawerOpen}
+          inert={!sidebarDrawerOpen}
           className={cn(
-            "sidebar-file-drawer glass-subtle fixed top-3 bottom-3 left-[calc(0.75rem+18rem)] z-39 rounded-r-xl flex flex-col overflow-hidden text-foreground",
-            "border-y border-r border-border/30",
+            "sidebar-file-drawer glass-subtle fixed inset-y-0 left-[18rem] z-39 rounded-r-xl flex flex-col overflow-hidden text-foreground",
+            "border-border/30",
             "shadow-xl shadow-black/15",
+            "transition-transform duration-300 ease-out",
+            sidebarDrawerOpen
+              ? "translate-x-0"
+              : collapsed
+                ? "pointer-events-none -translate-x-[calc(100%+18.75rem)]"
+                : "pointer-events-none -translate-x-[calc(100%+0.75rem)]",
             "w-60",
           )}
+          style={{ borderTopWidth: 0, borderBottomWidth: 0, borderLeftWidth: 0 }}
         >
           <div className="sidebar-file-drawer__inner flex h-full flex-col">
-            {/* Compact header */}
-            <div className="border-b border-border/30 px-2.5 pt-2.5 pb-2">
-              <div className="flex items-center justify-between gap-2">
+            {/* Compact header — title band aligns with the main sidebar header */}
+            <div className="border-b border-border/30 px-2.5 pb-2">
+              <div
+                className="flex items-center justify-between gap-2"
+                style={{ height: "var(--app-titlebar-band)" }}
+                onMouseDown={handleTitlebarDrag}
+              >
                 <div className="flex min-w-0 items-center gap-2">
                   <span
                     className="size-1.5 rounded-full shrink-0"
@@ -1012,7 +1045,7 @@ export default function Sidebar({
                   </svg>
                 </Button>
               </div>
-              <div className="mt-2 flex gap-1">
+              <div className="flex gap-1">
                 <Input
                   name="file-filter"
                   value={activeWorkspaceFileQuery}

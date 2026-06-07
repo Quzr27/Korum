@@ -60,6 +60,103 @@
   --agent-window-status-halo: transparent;
 }
 
+.war-room .window.agent-war-room-pulse--working,
+.war-room .window.agent-war-room-pulse--waiting {
+  --agent-war-room-ring: var(--agent-war-room-working-ring);
+  --agent-war-room-ring-strong: var(--agent-war-room-working-ring-strong);
+  --agent-war-room-halo: var(--agent-war-room-working-halo);
+  box-shadow:
+    0 0 0 1px var(--term-border, var(--border)),
+    0 0 0 2px color-mix(in oklch, var(--agent-war-room-ring) 76%, transparent),
+    0 0 24px var(--agent-war-room-halo),
+    0 9px 26px rgba(0, 0, 0, 0.4);
+}
+
+.war-room .window.agent-war-room-pulse--working[data-active="true"],
+.war-room .window.agent-war-room-pulse--waiting[data-active="true"] {
+  box-shadow:
+    0 0 0 1px var(--term-border, var(--border)),
+    0 0 0 2px var(--agent-war-room-ring-strong),
+    0 0 30px var(--agent-war-room-halo),
+    0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+.war-room .window.agent-war-room-pulse--working {
+  animation: agent-war-room-working-pulse 4.8s ease-in-out infinite;
+}
+
+.war-room .window.agent-war-room-pulse--waiting {
+  --agent-war-room-ring: var(--agent-war-room-waiting-ring);
+  --agent-war-room-ring-strong: var(--agent-war-room-waiting-ring-strong);
+  --agent-war-room-halo: var(--agent-war-room-waiting-halo);
+  animation: agent-war-room-waiting-settle 8s ease-out 1 forwards;
+}
+
+.war-room .canvas-viewport.panning .window.agent-war-room-pulse--working,
+.war-room .canvas-viewport.panning .window.agent-war-room-pulse--waiting,
+.war-room .canvas-viewport.zooming .window.agent-war-room-pulse--working,
+.war-room .canvas-viewport.zooming .window.agent-war-room-pulse--waiting {
+  animation-play-state: paused;
+}
+
+@keyframes agent-war-room-working-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px var(--term-border, var(--border)),
+      0 0 0 2px color-mix(in oklch, var(--agent-war-room-ring) 64%, transparent),
+      0 0 20px color-mix(in oklch, var(--agent-war-room-halo) 82%, transparent),
+      0 9px 26px rgba(0, 0, 0, 0.4);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px var(--term-border, var(--border)),
+      0 0 0 2px var(--agent-war-room-ring-strong),
+      0 0 34px var(--agent-war-room-halo),
+      0 10px 30px rgba(0, 0, 0, 0.42);
+  }
+}
+
+@keyframes agent-war-room-waiting-settle {
+  0% {
+    box-shadow:
+      0 0 0 1px var(--term-border, var(--border)),
+      0 0 0 2px var(--agent-war-room-ring-strong),
+      0 0 18px var(--agent-war-room-waiting-flare),
+      0 0 52px var(--agent-war-room-halo),
+      0 12px 42px rgba(0, 0, 0, 0.55);
+  }
+  18% {
+    box-shadow:
+      0 0 0 1px var(--term-border, var(--border)),
+      0 0 0 3px var(--agent-war-room-ring-strong),
+      0 0 28px var(--agent-war-room-waiting-flare),
+      0 0 72px var(--agent-war-room-halo),
+      0 13px 44px rgba(0, 0, 0, 0.58);
+  }
+  42% {
+    box-shadow:
+      0 0 0 1px var(--term-border, var(--border)),
+      0 0 0 2px var(--agent-war-room-ring-strong),
+      0 0 18px var(--agent-war-room-waiting-flare),
+      0 0 50px var(--agent-war-room-halo),
+      0 12px 40px rgba(0, 0, 0, 0.52);
+  }
+  100% {
+    box-shadow:
+      0 0 0 1px var(--term-border, var(--border)),
+      0 0 0 2px color-mix(in oklch, var(--agent-war-room-ring-strong) 86%, transparent),
+      0 0 36px color-mix(in oklch, var(--agent-war-room-halo) 76%, transparent),
+      0 10px 34px rgba(0, 0, 0, 0.46);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .war-room .window.agent-war-room-pulse--working,
+  .war-room .window.agent-war-room-pulse--waiting {
+    animation: none;
+  }
+}
+
 .window-titlebar {
   position: relative;
   display: flex;

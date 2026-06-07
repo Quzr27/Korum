@@ -36,6 +36,7 @@ const SHORTCUT_GROUPS = [
       { keys: ["\u2318", "\u21E7", "N"], description: "New note" },
       { keys: ["\u2318", "W"], description: "Close active window" },
       { keys: ["\u2318", "\u21E7", "A"], description: "Arrange in grid" },
+      { keys: ["\u2318", "\u21E7", "M"], description: "War-room mode" },
       { keys: ["\u2318", "\u21E7", "W"], description: "New workspace" },
       { keys: ["\u2318", "\u21E7", "?"], description: "Keyboard shortcuts" },
     ],

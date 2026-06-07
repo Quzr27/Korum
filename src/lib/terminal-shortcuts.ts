@@ -13,7 +13,7 @@ export function handleTerminalShortcut(
 ): boolean {
   const mod = event.metaKey || event.ctrlKey;
 
-  if (mod && (event.key === "v" || event.key === "k" || event.key === "?" || event.key === "n" || event.key === "N" || event.key === "w" || event.key === "W" || event.key === "A")) {
+  if (mod && (event.key === "v" || event.key === "k" || event.key === "?" || event.key === "n" || event.key === "N" || event.key === "w" || event.key === "W" || event.key === "A" || event.key === "m" || event.key === "M")) {
     if (event.type === "keyup") return false;
   }
 
@@ -47,7 +47,7 @@ export function handleTerminalShortcut(
   }
 
   // Global shortcuts — let bubble to document handler
-  if (mod && (event.key === "?" || event.key === "n" || event.key === "N" || event.key === "w" || event.key === "W" || event.key === "A")) {
+  if (mod && (event.key === "?" || event.key === "n" || event.key === "N" || event.key === "w" || event.key === "W" || event.key === "A" || event.key === "m" || event.key === "M")) {
     return false;
   }
 

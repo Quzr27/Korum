@@ -202,7 +202,7 @@ export default function UsageLimitsCard() {
       role="status"
       aria-label="Usage limits"
       size="sm"
-      className="glass-subtle fixed top-3 right-3 z-40 w-44 select-none border-none! gap-2.5 rounded-xl py-2.5 shadow-lg shadow-black/8"
+      className="app-chrome-top glass-subtle fixed right-3 z-40 w-44 select-none border-none! gap-2.5 rounded-xl py-2.5 shadow-lg shadow-black/8"
     >
       <CardContent className="flex flex-col gap-2.5">
         {hasClaude && claude ? (
