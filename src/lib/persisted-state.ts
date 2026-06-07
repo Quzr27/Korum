@@ -145,6 +145,7 @@ function sanitizeWindow(value: unknown, defaults: WindowDefaults): WindowState |
       type: "code",
       sourcePath: value.sourcePath,
       viewMode: value.viewMode === "changes" ? "changes" : "file",
+      originTerminalId: typeof value.originTerminalId === "string" ? value.originTerminalId : undefined,
     };
   }
   return {
@@ -168,13 +169,26 @@ export function hydratePersistedState(
     : [];
   const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
 
-  const windows = Array.isArray(input.windows)
+  let windows = Array.isArray(input.windows)
     ? input.windows
         .map((window) => sanitizeWindow(window, defaults))
         .filter((window): window is WindowState => {
           return window !== null && workspaceIds.has(window.workspaceId);
         })
     : [];
+
+  const terminalWorkspaceById = new Map(
+    windows
+      .filter((window) => window.type === "terminal")
+      .map((window) => [window.id, window.workspaceId] as const),
+  );
+  windows = windows.map((window) => {
+    if (window.type !== "code" || !window.originTerminalId) return window;
+    if (terminalWorkspaceById.get(window.originTerminalId) === window.workspaceId) return window;
+
+    const { originTerminalId: _, ...rest } = window;
+    return rest;
+  });
 
   const rawViewports = isRecord(input.viewports) ? input.viewports : {};
   const viewports = Object.fromEntries(

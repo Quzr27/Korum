@@ -355,6 +355,77 @@ pub fn get_git_status(root_path: &str) -> Result<GitStatusResult, String> {
     })
 }
 
+pub fn get_git_file_status(path: &str, root: &str) -> Result<Option<GitFileStatus>, String> {
+    let confined = confine_path(path, root)?;
+
+    let repo = match git2::Repository::discover(root) {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+
+    let repo_root = repo
+        .workdir()
+        .ok_or_else(|| "Bare repository".to_string())?;
+    let repo_root_canonical =
+        std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+
+    let relative = match confined.strip_prefix(&repo_root_canonical) {
+        Ok(path) => path,
+        Err(_) => return Ok(None),
+    };
+    let relative_str = relative.to_string_lossy();
+
+    let statuses = repo
+        .statuses(Some(
+            git2::StatusOptions::new()
+                .pathspec(&*relative_str)
+                .include_untracked(true),
+        ))
+        .map_err(|e| format!("Failed to get file status: {e}"))?;
+
+    let Some(entry) = statuses.iter().next() else {
+        return Ok(None);
+    };
+
+    let status = entry.status();
+    let status_label = if status.contains(git2::Status::INDEX_RENAMED)
+        || status.contains(git2::Status::WT_RENAMED)
+    {
+        "R"
+    } else if status.contains(git2::Status::INDEX_DELETED)
+        || status.contains(git2::Status::WT_DELETED)
+    {
+        "D"
+    } else if status.contains(git2::Status::INDEX_NEW) {
+        "A"
+    } else if status.contains(git2::Status::INDEX_MODIFIED)
+        || status.contains(git2::Status::WT_MODIFIED)
+        || status.contains(git2::Status::INDEX_TYPECHANGE)
+        || status.contains(git2::Status::WT_TYPECHANGE)
+    {
+        "M"
+    } else {
+        return Ok(None);
+    };
+
+    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+    let mut diff_opts = git2::DiffOptions::new();
+    diff_opts.pathspec(&*relative_str);
+    let (insertions, deletions) = repo
+        .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut diff_opts))
+        .ok()
+        .and_then(|diff| diff.stats().ok())
+        .map(|stats| (stats.insertions() as u32, stats.deletions() as u32))
+        .unwrap_or((0, 0));
+
+    Ok(Some(GitFileStatus {
+        path: relative_str.to_string(),
+        status: status_label.to_string(),
+        insertions,
+        deletions,
+    }))
+}
+
 /// Count visible (non-excluded) children of a directory.
 /// Uses a lightweight count — skips hardcoded excludes but does NOT rebuild
 /// the full gitignore chain per child (too expensive for a cosmetic badge).
@@ -953,6 +1024,90 @@ mod tests {
         fs::create_dir(root.join(".git")).expect("mkdir .git");
         fs::write(root.join(".gitignore"), gitignore_content).expect("write .gitignore");
         root
+    }
+
+    fn init_git_repo_with_file(
+        name: &str,
+        relative_path: &str,
+        content: &str,
+    ) -> (PathBuf, git2::Repository) {
+        let root = make_temp_dir(name);
+        let repo = git2::Repository::init(&root).expect("init repository");
+        let file_path = root.join(relative_path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).expect("create parent directory");
+        }
+        fs::write(&file_path, content).expect("write initial file");
+
+        let mut index = repo.index().expect("open index");
+        index
+            .add_path(Path::new(relative_path))
+            .expect("add file to index");
+        index.write().expect("write index");
+        let tree_id = index.write_tree().expect("write tree");
+        drop(index);
+
+        let tree = repo.find_tree(tree_id).expect("find tree");
+        let signature =
+            git2::Signature::now("Korum Test", "korum-test@example.com").expect("signature");
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Initial commit",
+            &tree,
+            &[],
+        )
+        .expect("commit");
+        drop(tree);
+
+        (root, repo)
+    }
+
+    #[test]
+    fn get_git_file_status_reports_modified_tracked_file() {
+        let (root, repo) = init_git_repo_with_file("gfs_modified", "src/app.rs", "fn main() {}\n");
+        let file_path = root.join("src/app.rs");
+        fs::write(&file_path, "fn main() {\n    println!(\"hi\");\n}\n").expect("modify file");
+
+        let status = get_git_file_status(&file_path.to_string_lossy(), &root.to_string_lossy())
+            .expect("status lookup")
+            .expect("modified status");
+
+        assert_eq!(status.path, "src/app.rs");
+        assert_eq!(status.status, "M");
+
+        drop(repo);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn get_git_file_status_returns_none_for_untracked_file() {
+        let (root, repo) = init_git_repo_with_file("gfs_untracked", "src/app.rs", "fn main() {}\n");
+        let file_path = root.join("scratch.rs");
+        fs::write(&file_path, "temporary\n").expect("write untracked file");
+
+        let status = get_git_file_status(&file_path.to_string_lossy(), &root.to_string_lossy())
+            .expect("status lookup");
+
+        assert!(status.is_none());
+
+        drop(repo);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn get_git_file_status_returns_none_for_clean_file() {
+        let (root, repo) = init_git_repo_with_file("gfs_clean", "src/app.rs", "fn main() {}\n");
+        let file_path = root.join("src/app.rs");
+
+        let status = get_git_file_status(&file_path.to_string_lossy(), &root.to_string_lossy())
+            .expect("status lookup");
+
+        assert!(status.is_none());
+
+        drop(repo);
+        fs::remove_dir_all(&root).ok();
     }
 
     /// show_ignored=false: gitignored files are excluded from results.

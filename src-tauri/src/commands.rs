@@ -207,6 +207,14 @@ pub fn get_git_status(root_path: String) -> Result<crate::file_tree::GitStatusRe
 }
 
 #[tauri::command]
+pub fn get_git_file_status(
+    path: String,
+    root: String,
+) -> Result<Option<crate::file_tree::GitFileStatus>, String> {
+    crate::file_tree::get_git_file_status(&path, &root)
+}
+
+#[tauri::command]
 pub fn read_file_content(path: String) -> Result<String, String> {
     crate::file_tree::read_file_content(&path)
 }

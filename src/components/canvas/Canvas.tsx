@@ -1,4 +1,4 @@
-import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Layers01Icon, Note01Icon, GridViewIcon, TerminalIcon } from "@hugeicons/core-free-icons";
 import TerminalWindow from "./TerminalWindow";
@@ -14,6 +14,14 @@ import {
 import { useSettings } from "@/lib/settings-context";
 import { selectLiveTerminalIds } from "@/lib/live-terminals";
 import { isWindowInViewport } from "@/lib/viewport";
+import {
+  buildTetherRenderIndex,
+  getTetherEndpoints,
+  TETHER_ARROW_MARKER_ID,
+  type TetherRenderIndex,
+  type TetherRect,
+} from "@/lib/window-tethers";
+import type { WindowMotionRect } from "@/lib/use-drag-resize";
 import type { SnapTargetRect } from "@/lib/window-snapping";
 import type { WindowState, WindowUpdatable, Workspace, Point2D, PasteRequest, CodeViewMode } from "@/types";
 import { WORKSPACE_COLORS } from "@/types";
@@ -48,7 +56,7 @@ interface CanvasProps {
   onArrangeWindows: () => void;
   onCreateWorkspace: () => void;
   onPasteRequest: (request: PasteRequest) => void;
-  onOpenTerminalFileLink: (workspaceId: string, filePath: string, line: number, column?: number) => void;
+  onOpenTerminalFileLink: (workspaceId: string, originTerminalId: string, filePath: string, line: number, column?: number) => void;
   onViewModeChange: (id: string, mode: CodeViewMode) => void;
 }
 
@@ -93,9 +101,20 @@ export default memo(function Canvas({
   const viewportRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const dotsRef = useRef<HTMLDivElement>(null);
+  const tetherLayerRef = useRef<SVGSVGElement>(null);
+  const tetherNodesRef = useRef<Map<string, SVGLineElement>>(new Map());
   const snapGuideLayerRef = useRef<HTMLDivElement>(null);
   const snapTargetsRef = useRef<readonly SnapTargetRect[]>([]);
   const snapTargetSignatureRef = useRef("");
+  const tetherIndexRef = useRef<TetherRenderIndex<WindowState>>({
+    windowsById: new Map(),
+    pairs: [],
+    pairKeys: new Set(),
+    windowIds: new Set(),
+  });
+  const wsMapRef = useRef(wsMap);
+  const liveWindowRectsRef = useRef<Map<string, WindowMotionRect>>(new Map());
+  const viewportSizeRef = useRef({ width: window.innerWidth, height: window.innerHeight });
   const panRef = useRef(pan);
   const zoomRef = useRef(zoom);
   const motionRef = useRef(false);
@@ -126,6 +145,114 @@ export default memo(function Canvas({
     panRef.current = pan;
     zoomRef.current = zoom;
   }
+  wsMapRef.current = wsMap;
+
+  const syncTetherLayer = useCallback(() => {
+    const layer = tetherLayerRef.current;
+    if (!layer) return;
+
+    const tetherIndex = tetherIndexRef.current;
+    const { width: viewportWidth, height: viewportHeight } = viewportSizeRef.current;
+    const currentPan = panRef.current;
+    const currentZoom = zoomRef.current;
+
+    const getRect = (windowState: WindowState): TetherRect => (
+      liveWindowRectsRef.current.get(windowState.id) ?? windowState
+    );
+
+    for (const pair of tetherIndex.pairs) {
+      const origin = tetherIndex.windowsById.get(pair.originId);
+      const target = tetherIndex.windowsById.get(pair.targetId);
+      if (!origin || !target) continue;
+
+      const originRect = getRect(origin);
+      const targetRect = getRect(target);
+      if (
+        !isWindowInViewport(originRect, currentPan, currentZoom, viewportWidth, viewportHeight, 80) ||
+        !isWindowInViewport(targetRect, currentPan, currentZoom, viewportWidth, viewportHeight, 80)
+      ) {
+        continue;
+      }
+
+      layer.style.setProperty("--tether-accent", pair.accent);
+      let line = tetherNodesRef.current.get(pair.key);
+      if (!line) {
+        line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.classList.add("canvas-tether-line");
+        line.dataset.tetherId = pair.key;
+        line.setAttribute("marker-end", pair.markerEnd);
+        layer.appendChild(line);
+        tetherNodesRef.current.set(pair.key, line);
+      }
+
+      const endpoints = getTetherEndpoints(originRect, targetRect);
+      line.setAttribute("x1", String(endpoints.x1));
+      line.setAttribute("y1", String(endpoints.y1));
+      line.setAttribute("x2", String(endpoints.x2));
+      line.setAttribute("y2", String(endpoints.y2));
+    }
+
+    for (const [key, node] of tetherNodesRef.current) {
+      if (tetherIndex.pairKeys.has(key)) continue;
+      node.remove();
+      tetherNodesRef.current.delete(key);
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    viewportSizeRef.current = {
+      width: viewport?.clientWidth ?? window.innerWidth,
+      height: viewport?.clientHeight ?? window.innerHeight,
+    };
+    tetherIndexRef.current = buildTetherRenderIndex(visibleWindows, (workspaceId) => {
+      const ws = wsMapRef.current.get(workspaceId);
+      return ws ? WORKSPACE_COLORS[ws.color] : undefined;
+    });
+    syncTetherLayer();
+  }, [visibleWindows, wsMap, syncTetherLayer]);
+
+  useLayoutEffect(() => {
+    syncTetherLayer();
+  }, [pan.x, pan.y, zoom, syncTetherLayer]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const viewport = viewportRef.current;
+      viewportSizeRef.current = {
+        width: viewport?.clientWidth ?? window.innerWidth,
+        height: viewport?.clientHeight ?? window.innerHeight,
+      };
+      syncTetherLayer();
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [syncTetherLayer]);
+
+  useEffect(() => {
+    const tetherNodes = tetherNodesRef.current;
+    const liveWindowRects = liveWindowRectsRef.current;
+    return () => {
+      for (const node of tetherNodes.values()) node.remove();
+      tetherNodes.clear();
+      liveWindowRects.clear();
+    };
+  }, []);
+
+  const handleLiveRectChange = useCallback((id: string, rect: WindowMotionRect | null) => {
+    if (!tetherIndexRef.current.windowIds.has(id)) {
+      liveWindowRectsRef.current.delete(id);
+      return;
+    }
+
+    if (rect) {
+      liveWindowRectsRef.current.set(id, rect);
+    } else {
+      liveWindowRectsRef.current.delete(id);
+    }
+    syncTetherLayer();
+  }, [syncTetherLayer]);
 
   const viewportRect = viewportRef.current?.getBoundingClientRect();
   const viewportWidth = viewportRect?.width ?? window.innerWidth;
@@ -346,6 +473,25 @@ export default memo(function Canvas({
           className="canvas-world"
           style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
         >
+          <svg
+            ref={tetherLayerRef}
+            className="canvas-tethers"
+            aria-hidden="true"
+          >
+            <defs>
+              <marker
+                id={TETHER_ARROW_MARKER_ID}
+                markerWidth="10"
+                markerHeight="10"
+                refX="8"
+                refY="5"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
+                <path className="canvas-tether-arrowhead" d="M 1 1 L 9 5 L 1 9 z" />
+              </marker>
+            </defs>
+          </svg>
           <div
             ref={snapGuideLayerRef}
             className="canvas-snap-guides"
@@ -382,6 +528,7 @@ export default memo(function Canvas({
                   onRename={onRename}
                   onPasteRequest={onPasteRequest}
                   onOpenFileLink={onOpenTerminalFileLink}
+                  onLiveRectChange={handleLiveRectChange}
                 />
               );
             }
@@ -402,6 +549,7 @@ export default memo(function Canvas({
                   onFocus={onFocus}
                   onRename={onRename}
                   onViewModeChange={onViewModeChange}
+                  onLiveRectChange={handleLiveRectChange}
                 />
               );
             }
@@ -420,6 +568,7 @@ export default memo(function Canvas({
                 onFocus={onFocus}
                 onRename={onRename}
                 onContentChange={onUpdateContent}
+                onLiveRectChange={handleLiveRectChange}
               />
             );
           })}

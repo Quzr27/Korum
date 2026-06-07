@@ -41,6 +41,8 @@ export interface TerminalBufferRange {
 const URL_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
 const FILE_LOCATION_PATTERN =
   /(^|[\s([{"'=])((?:(?:\/|\.{1,2}\/|~\/|[A-Za-z0-9_.@-]+\/)[^\s()<>:"'`]+?|[A-Za-z0-9_.@-]+)\.[A-Za-z0-9][A-Za-z0-9._+-]*)(?::(\d+)(?::(\d+))?|\((\d+)(?:,(\d+))?\))/g;
+const INLINE_FILE_PATH_PATTERN =
+  /(^|[\s([{"'=])((?:(?:\/|\.{1,2}\/|~\/|[A-Za-z0-9_.@-]+\/)[^\s()<>:"'`]+?)\.[A-Za-z0-9][A-Za-z0-9._+-]*)/g;
 const FILE_CONTEXT_PATTERN =
   /^(\s*)((?:(?:\/|\.{1,2}\/|~\/|[A-Za-z0-9_.@-]+\/)[^\s()<>:"'`]+?|[A-Za-z0-9_.@-]+)\.[A-Za-z0-9][A-Za-z0-9._+-]*)(\s*)$/;
 const ESLINT_DIAGNOSTIC_PATTERN = /^(\s*)(\d+):(\d+)(?=\s+(?:error|warning)\b|\s)/;
@@ -119,6 +121,7 @@ export function resolveTerminalFilePath(path: string, workspaceRoot?: string): s
 export function findTerminalSmartLinks(line: string): TerminalSmartLink[] {
   const links: TerminalSmartLink[] = [];
   const urlRanges: Array<readonly [number, number]> = [];
+  const occupiedRanges: Array<readonly [number, number]> = [];
 
   for (const match of line.matchAll(URL_PATTERN)) {
     const raw = match[0];
@@ -128,6 +131,7 @@ export function findTerminalSmartLinks(line: string): TerminalSmartLink[] {
     const startIndex = match.index ?? 0;
     const endIndex = startIndex + text.length;
     urlRanges.push([startIndex, endIndex]);
+    occupiedRanges.push([startIndex, endIndex]);
     links.push({
       kind: "url",
       text,
@@ -151,6 +155,7 @@ export function findTerminalSmartLinks(line: string): TerminalSmartLink[] {
     }
 
     const columnPart = match[4] ?? match[6];
+    occupiedRanges.push([startIndex, endIndex]);
     links.push({
       kind: "file",
       text,
@@ -162,8 +167,30 @@ export function findTerminalSmartLinks(line: string): TerminalSmartLink[] {
     });
   }
 
+  for (const match of line.matchAll(INLINE_FILE_PATH_PATTERN)) {
+    const prefix = match[1] ?? "";
+    const path = match[2];
+    if (!path) continue;
+
+    const startIndex = (match.index ?? 0) + prefix.length;
+    const endIndex = startIndex + path.length;
+    if (occupiedRanges.some(([rangeStart, rangeEnd]) => rangesOverlap(startIndex, endIndex, rangeStart, rangeEnd))) {
+      continue;
+    }
+
+    occupiedRanges.push([startIndex, endIndex]);
+    links.push({
+      kind: "file",
+      text: path,
+      path,
+      line: 1,
+      startIndex,
+      endIndex,
+    });
+  }
+
   const context = findTerminalFileContext(line);
-  if (context && !urlRanges.some(([urlStart, urlEnd]) => rangesOverlap(context.startIndex, context.endIndex, urlStart, urlEnd))) {
+  if (context && !occupiedRanges.some(([rangeStart, rangeEnd]) => rangesOverlap(context.startIndex, context.endIndex, rangeStart, rangeEnd))) {
     links.push({
       kind: "file",
       text: context.text,

@@ -110,6 +110,29 @@ describe("findTerminalSmartLinks", () => {
     ]);
   });
 
+  it("detects inline relative and absolute file paths without line numbers", () => {
+    const line = "- Relatívna: src/App.tsx | Absolútna: /Users/dominiknovak/Documents/DEV/Mine/Korum/src/App.tsx";
+
+    expect(findTerminalSmartLinks(line)).toEqual([
+      {
+        kind: "file",
+        text: "src/App.tsx",
+        path: "src/App.tsx",
+        line: 1,
+        startIndex: 13,
+        endIndex: 24,
+      },
+      {
+        kind: "file",
+        text: "/Users/dominiknovak/Documents/DEV/Mine/Korum/src/App.tsx",
+        path: "/Users/dominiknovak/Documents/DEV/Mine/Korum/src/App.tsx",
+        line: 1,
+        startIndex: 38,
+        endIndex: 94,
+      },
+    ]);
+  });
+
   it("detects file locations written with parentheses", () => {
     const links = findTerminalSmartLinks("error in src/lib/foo.ts(12,5): nope");
 

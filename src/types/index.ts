@@ -47,6 +47,7 @@ export interface CodeWindow extends BaseWindow {
   type: "code";
   sourcePath: string;
   viewMode: CodeViewMode;
+  originTerminalId?: string;
   targetLine?: number;
   targetColumn?: number;
   targetNonce?: number;
