@@ -4,6 +4,19 @@ All notable changes to Korum will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.0] - 2026-06-07
+
+### Added
+- **Agent status indicators** — terminals show live AI agent activity: a green halo while an agent is working, amber while it waits for your input, neutral when idle. The same status appears as minimap dots and per-terminal dots in the sidebar (with an aggregate dot on collapsed workspaces) so sessions are visible across workspaces. Cross-vendor (Claude Code / Codex), correlated per session by process so several agents in one repo are tracked independently.
+- **Diff tethers** — opening a changed file from a terminal link draws a connecting line on the canvas from the terminal to the diff window it produced.
+
+### Changed
+- **Smart-link git checks** — terminal file links use a narrow single-file git status lookup and de-duplicate in-flight opens instead of scanning the whole workspace.
+
+### Fixed
+- **Working status holds for the whole task** — agent status no longer flickers to neutral between tool calls, and multiple Claude sessions sharing one repo are no longer reported ambiguously.
+- **Status in packaged builds** — `claude agents --json` resolves through a login-shell PATH, so agent status works in the installed app, not only under `tauri dev`.
+
 ## [0.3.0] - 2026-06-06
 
 ### Added
