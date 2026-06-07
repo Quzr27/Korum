@@ -8,7 +8,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useDragResize } from "@/lib/use-drag-resize";
+import { useDragResize, type WindowMotionRect } from "@/lib/use-drag-resize";
 import type { SnapTargetRect } from "@/lib/window-snapping";
 import type { NoteWindow as NoteWindowState, WindowUpdatable } from "@/types";
 
@@ -25,6 +25,7 @@ interface Props {
   onFocus: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onContentChange: (id: string, content: string) => void;
+  onLiveRectChange?: (id: string, rect: WindowMotionRect | null) => void;
 }
 
 function formatDate(ts?: number): string {
@@ -54,10 +55,10 @@ const SAFE_MD_COMPONENTS: Components = {
   },
 };
 
-export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, snapTargetsRef, snapGuideLayerRef, wsColor, onClose, onUpdate, onFocus, onRename, onContentChange }: Props) {
+export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, snapTargetsRef, snapGuideLayerRef, wsColor, onClose, onUpdate, onFocus, onRename, onContentChange, onLiveRectChange }: Props) {
   const { windowRef, handleTitleMouseDown, handleEdgeResize } = useDragResize({
     id, x: win.x, y: win.y, width: win.width, height: win.height,
-    zoomRef, onUpdate, onFocus, snapTargetsRef, snapGuideLayerRef,
+    zoomRef, onUpdate, onFocus, snapTargetsRef, snapGuideLayerRef, onLiveRectChange,
   });
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState("");

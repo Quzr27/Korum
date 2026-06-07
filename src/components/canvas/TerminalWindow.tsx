@@ -13,7 +13,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useDragResize } from "@/lib/use-drag-resize";
+import { useDragResize, type WindowMotionRect } from "@/lib/use-drag-resize";
 import type { SnapTargetRect } from "@/lib/window-snapping";
 import type { TerminalWindow as TerminalWindowState, WindowUpdatable, PasteRequest } from "@/types";
 
@@ -64,7 +64,8 @@ interface Props {
   onFocus: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onPasteRequest: (request: PasteRequest) => void;
-  onOpenFileLink: (workspaceId: string, filePath: string, line: number, column?: number) => void;
+  onOpenFileLink: (workspaceId: string, originTerminalId: string, filePath: string, line: number, column?: number) => void;
+  onLiveRectChange?: (id: string, rect: WindowMotionRect | null) => void;
 }
 
 export default memo(function TerminalWindow({
@@ -89,12 +90,13 @@ export default memo(function TerminalWindow({
   onRename,
   onPasteRequest,
   onOpenFileLink,
+  onLiveRectChange,
 }: Props) {
   const { settings } = useSettings();
   const { windowRef, handleTitleMouseDown, handleEdgeResize } = useDragResize({
     id, x: win.x, y: win.y, width: win.width, height: win.height,
     zoomRef, onUpdate, onFocus, minWidth: 240, minHeight: 120,
-    snapTargetsRef, snapGuideLayerRef,
+    snapTargetsRef, snapGuideLayerRef, onLiveRectChange,
   });
   const termRef = useRef<HTMLDivElement>(null);
   const ptyIdRef = useRef<string | null>(null);
@@ -198,8 +200,8 @@ export default memo(function TerminalWindow({
   }, [shouldHydrate, respawnTrigger]);
 
   const handleOpenFileLink = useCallback((filePath: string, line: number, column?: number) => {
-    onOpenFileLink(win.workspaceId, filePath, line, column);
-  }, [onOpenFileLink, win.workspaceId]);
+    onOpenFileLink(win.workspaceId, id, filePath, line, column);
+  }, [id, onOpenFileLink, win.workspaceId]);
 
   // ── xterm session (Effect B + settings/focus/resize effects) ──
   const { termInstanceRef, isSessionReady } = useXtermSession({

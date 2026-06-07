@@ -24,11 +24,13 @@ import {
   collectTerminalIds,
   TERMINAL_HYDRATION_CONCURRENCY,
 } from "@/lib/terminal-hydration";
+import { selectSmartLinkCodeViewMode } from "@/lib/code-window-target";
+import { placeAdjacentWindow } from "@/lib/window-placement";
 import { isWindowInViewport } from "@/lib/viewport";
 import { WINDOW_GRID_GAP } from "@/lib/window-snapping";
 import { confirmAppQuit, QUIT_REQUESTED_EVENT } from "@/lib/quit-guard";
 import type { PersistedState, ViewportState } from "@/lib/persistence";
-import type { AgentStatus, WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest, CodeViewMode } from "@/types";
+import type { AgentStatus, WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest, CodeViewMode, GitFileStatus } from "@/types";
 
 interface AppSnapshot {
   workspaces: Workspace[];
@@ -41,14 +43,26 @@ interface AppSnapshot {
 interface CodeOpenTarget {
   line: number;
   column?: number;
+  originTerminalId?: string;
 }
 
 const SIDEBAR_RIGHT_EDGE = 288 + 12 + 24; // w-72 (288px) + left-3 (12px) + gap (24px)
 const GRID_TOP = 13; // align with sidebar top-3 (13px)
+const CODE_WINDOW_WIDTH = 820;
+const CODE_WINDOW_HEIGHT = 600;
 
 function getOpenFileDrawerWidth(): number {
   return document.querySelector<HTMLElement>('.sidebar-file-drawer[data-state="open"]')
     ?.getBoundingClientRect().width ?? 0;
+}
+
+function getVisibleWorldViewport(pan: Point2D, zoom: number) {
+  return {
+    x: (SIDEBAR_RIGHT_EDGE - pan.x) / zoom,
+    y: -pan.y / zoom,
+    width: Math.max((window.innerWidth - SIDEBAR_RIGHT_EDGE) / zoom, CODE_WINDOW_WIDTH),
+    height: Math.max(window.innerHeight / zoom, CODE_WINDOW_HEIGHT),
+  };
 }
 
 export default function App() {
@@ -95,6 +109,8 @@ export default function App() {
   const terminalSnapshotsRef = useRef<Record<string, string>>({});
   const agentStatusesRef = useRef<Map<string, AgentStatus>>(new Map());
   const codeTargetNonceRef = useRef(0);
+  const gitFileStatusRequestsRef = useRef<Map<string, Promise<GitFileStatus | null>>>(new Map());
+  const openFileRequestsRef = useRef<Set<string>>(new Set());
 
   // ── State ref (always current, avoids stale closures in save callbacks) ──
   const stateRef = useRef<AppSnapshot>({ workspaces, windows, activeWorkspaceId, pan, zoom });
@@ -500,75 +516,154 @@ export default function App() {
     saveAfterUpdate(); // immediate — structural change
   }, [saveAfterUpdate]);
 
+  const getGitFileStatus = useCallback((filePath: string, rootPath: string) => {
+    const key = `${rootPath}\0${filePath}`;
+    const existing = gitFileStatusRequestsRef.current.get(key);
+    if (existing) return existing;
+
+    const request = invoke<GitFileStatus | null>("get_git_file_status", {
+      path: filePath,
+      root: rootPath,
+    }).finally(() => {
+      if (gitFileStatusRequestsRef.current.get(key) === request) {
+        gitFileStatusRequestsRef.current.delete(key);
+      }
+    });
+    gitFileStatusRequestsRef.current.set(key, request);
+    return request;
+  }, []);
+
   /** Opens a file from the file tree as a CodeWindow (read-only, syntax highlighted). */
   const openFile = useCallback((filePath: string, workspaceId: string, target?: CodeOpenTarget) => {
-    // Check for existing CodeWindow or legacy NoteWindow with same source
-    const existing = stateRef.current.windows.find(
-      (w) => w.workspaceId === workspaceId &&
-        ((w.type === "code" && w.sourcePath === filePath) ||
-         (!target && w.type === "note" && w.sourcePath === filePath)),
-    );
-
-    if (existing) {
-      // DOM-direct focus (same pattern as focusWindow, inlined to avoid declaration order)
-      const z = nextZRef.current++;
-      const el = document.querySelector<HTMLElement>(`.canvas-world [data-window-id="${existing.id}"]`);
-      if (el) el.style.zIndex = String(z);
-      pendingZIndexRef.current.set(existing.id, z);
-      if (existing.type === "code" && target) {
-        const targetNonce = ++codeTargetNonceRef.current;
-        setWindows((prev) => prev.map((w) => (
-          w.id === existing.id && w.type === "code"
-            ? {
-                ...w,
-                viewMode: "file",
-                targetLine: target.line,
-                targetColumn: target.column,
-                targetNonce,
-                updatedAt: Date.now(),
-              }
-            : w
-        )));
-      }
-      setActiveWindowId(existing.id);
-      return;
-    }
-
-    const name = filePath.split(/[\\/]/).filter(Boolean).pop() ?? filePath;
-    countsRef.current.code += 1;
-    const now = Date.now();
-    const offset = spawnOffset.current * 30;
-    spawnOffset.current = (spawnOffset.current + 1) % 8;
-    const w: WindowState = {
-      id: crypto.randomUUID(),
-      x: SIDEBAR_RIGHT_EDGE + offset,
-      y: 24 + offset,
-      width: 820,
-      height: 600,
-      zIndex: nextZRef.current++,
-      title: name,
+    const openRequestKey = [
       workspaceId,
-      type: "code",
-      sourcePath: filePath,
-      viewMode: "file",
-      targetLine: target?.line,
-      targetColumn: target?.column,
-      targetNonce: target ? ++codeTargetNonceRef.current : undefined,
-      createdAt: now,
-      updatedAt: now,
-    };
-    setWindows((prev) => [...prev, w]);
-    setActiveWindowId(w.id);
-    saveAfterUpdate();
-  }, [saveAfterUpdate]);
+      filePath,
+      target?.originTerminalId ?? "",
+      target?.line ?? "",
+      target?.column ?? "",
+    ].join("\0");
+    if (openFileRequestsRef.current.has(openRequestKey)) return;
+    openFileRequestsRef.current.add(openRequestKey);
+
+    void (async () => {
+      try {
+        const workspace = stateRef.current.workspaces.find((ws) => ws.id === workspaceId);
+        let viewMode: CodeViewMode = "file";
+        if (target?.originTerminalId && workspace?.rootPath) {
+          try {
+            const status = await getGitFileStatus(filePath, workspace.rootPath);
+            viewMode = selectSmartLinkCodeViewMode({
+              sourcePath: filePath,
+              workspaceRoot: workspace.rootPath,
+              statuses: status ? [status] : [],
+            });
+          } catch (error) {
+            console.warn("[terminal-smart-links] Git status lookup failed:", error);
+          }
+        }
+
+        const originTerminalId = viewMode === "changes" ? target?.originTerminalId : undefined;
+
+        // Check for existing CodeWindow or legacy NoteWindow with same source
+        const existing = stateRef.current.windows.find(
+          (w) => w.workspaceId === workspaceId &&
+            ((w.type === "code" && w.sourcePath === filePath) ||
+             (!target && w.type === "note" && w.sourcePath === filePath)),
+        );
+
+        if (existing) {
+          // DOM-direct focus (same pattern as focusWindow, inlined to avoid declaration order)
+          const z = nextZRef.current++;
+          const el = document.querySelector<HTMLElement>(`.canvas-world [data-window-id="${existing.id}"]`);
+          if (el) el.style.zIndex = String(z);
+          pendingZIndexRef.current.set(existing.id, z);
+          if (existing.type === "code" && target) {
+            const targetNonce = viewMode === "file" ? ++codeTargetNonceRef.current : undefined;
+            setWindows((prev) => prev.map((w) => (
+              w.id === existing.id && w.type === "code"
+                ? {
+                    ...w,
+                    viewMode,
+                    originTerminalId,
+                    targetLine: viewMode === "file" ? target.line : undefined,
+                    targetColumn: viewMode === "file" ? target.column : undefined,
+                    targetNonce,
+                    updatedAt: Date.now(),
+                  }
+                : w
+            )));
+            saveAfterUpdate();
+          }
+          setActiveWindowId(existing.id);
+          return;
+        }
+
+        const name = filePath.split(/[\\/]/).filter(Boolean).pop() ?? filePath;
+        countsRef.current.code += 1;
+        const now = Date.now();
+        let x: number;
+        let y: number;
+
+        const originTerminal = originTerminalId
+          ? stateRef.current.windows.find((w) => (
+              w.type === "terminal" &&
+              w.id === originTerminalId &&
+              w.workspaceId === workspaceId
+            ))
+          : undefined;
+
+        if (originTerminal) {
+          const placed = placeAdjacentWindow({
+            origin: originTerminal,
+            existing: stateRef.current.windows.filter((w) => w.workspaceId === workspaceId),
+            viewport: getVisibleWorldViewport(stateRef.current.pan, stateRef.current.zoom),
+            size: { width: CODE_WINDOW_WIDTH, height: CODE_WINDOW_HEIGHT },
+          });
+          x = placed.x;
+          y = placed.y;
+        } else {
+          const offset = spawnOffset.current * 30;
+          spawnOffset.current = (spawnOffset.current + 1) % 8;
+          x = SIDEBAR_RIGHT_EDGE + offset;
+          y = 24 + offset;
+        }
+
+        const w: WindowState = {
+          id: crypto.randomUUID(),
+          x,
+          y,
+          width: CODE_WINDOW_WIDTH,
+          height: CODE_WINDOW_HEIGHT,
+          zIndex: nextZRef.current++,
+          title: name,
+          workspaceId,
+          type: "code",
+          sourcePath: filePath,
+          viewMode,
+          originTerminalId,
+          targetLine: viewMode === "file" ? target?.line : undefined,
+          targetColumn: viewMode === "file" ? target?.column : undefined,
+          targetNonce: viewMode === "file" && target ? ++codeTargetNonceRef.current : undefined,
+          createdAt: now,
+          updatedAt: now,
+        };
+        setWindows((prev) => [...prev, w]);
+        setActiveWindowId(w.id);
+        saveAfterUpdate();
+      } finally {
+        openFileRequestsRef.current.delete(openRequestKey);
+      }
+    })();
+  }, [getGitFileStatus, saveAfterUpdate]);
 
   const openTerminalFileLink = useCallback((
     workspaceId: string,
+    originTerminalId: string,
     filePath: string,
     line: number,
     column?: number,
   ) => {
-    openFile(filePath, workspaceId, { line, column });
+    openFile(filePath, workspaceId, { line, column, originTerminalId });
   }, [openFile]);
 
   /** Called by TerminalWindow when PTY spawns — stores ptyId in-memory (not persisted). */

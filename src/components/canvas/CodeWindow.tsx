@@ -22,7 +22,7 @@ import { useSettings } from "@/lib/settings-context";
 import { CODE_THEMES, CODE_THEME_LABELS, CODE_THEME_BG } from "@/lib/settings/types";
 import { tokenizeCode } from "@/lib/shiki";
 import { detectLanguage } from "@/lib/lang-detect";
-import { useDragResize } from "@/lib/use-drag-resize";
+import { useDragResize, type WindowMotionRect } from "@/lib/use-drag-resize";
 import { shouldHandleCodeTarget } from "@/lib/code-window-target";
 import type { SnapTargetRect } from "@/lib/window-snapping";
 import type { CodeWindow as CodeWindowState, CodeViewMode, DiffLine, WindowUpdatable } from "@/types";
@@ -48,6 +48,7 @@ interface Props {
   onFocus: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onViewModeChange: (id: string, mode: CodeViewMode) => void;
+  onLiveRectChange?: (id: string, rect: WindowMotionRect | null) => void;
 }
 
 export default memo(function CodeWindow({
@@ -64,6 +65,7 @@ export default memo(function CodeWindow({
   onFocus,
   onRename,
   onViewModeChange,
+  onLiveRectChange,
 }: Props) {
   const { settings, update: updateSettings } = useSettings();
   const codeTheme = settings.codeTheme;
@@ -71,7 +73,7 @@ export default memo(function CodeWindow({
   const { windowRef, handleTitleMouseDown, handleEdgeResize } = useDragResize({
     id, x: win.x, y: win.y, width: win.width, height: win.height,
     zoomRef, onUpdate, onFocus, minWidth: 240, minHeight: 120,
-    snapTargetsRef, snapGuideLayerRef,
+    snapTargetsRef, snapGuideLayerRef, onLiveRectChange,
   });
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState("");

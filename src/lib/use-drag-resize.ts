@@ -20,6 +20,14 @@ interface UseDragResizeOptions {
   minHeight?: number;
   snapTargetsRef?: React.RefObject<readonly SnapTargetRect[]>;
   snapGuideLayerRef?: React.RefObject<HTMLDivElement | null>;
+  onLiveRectChange?: (id: string, rect: WindowMotionRect | null) => void;
+}
+
+export interface WindowMotionRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 interface DragState {
@@ -56,6 +64,7 @@ export function useDragResize({
   minHeight = 100,
   snapTargetsRef,
   snapGuideLayerRef,
+  onLiveRectChange,
 }: UseDragResizeOptions) {
   const windowRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -122,8 +131,9 @@ export function useDragResize({
         listenersRef.current = null;
       }
       clearSnapGuides();
+      onLiveRectChange?.(id, null);
     };
-  }, [clearSnapGuides]);
+  }, [clearSnapGuides, id, onLiveRectChange]);
 
   const handleTitleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -170,6 +180,7 @@ export function useDragResize({
         if (!d) return;
         const next = getDragPosition(d, ev);
         el.style.transform = `translate(${next.x - d.origX}px, ${next.y - d.origY}px)`;
+        onLiveRectChange?.(id, { x: next.x, y: next.y, width: d.origW, height: d.origH });
         renderSnapGuides(next.guides);
       };
 
@@ -188,7 +199,11 @@ export function useDragResize({
         const finalX = next.x;
         const finalY = next.y;
         if (next.rawDx !== 0 || next.rawDy !== 0) {
+          onLiveRectChange?.(id, { x: finalX, y: finalY, width: d.origW, height: d.origH });
           onUpdate(id, { x: finalX, y: finalY });
+          requestAnimationFrame(() => onLiveRectChange?.(id, null));
+        } else {
+          onLiveRectChange?.(id, null);
         }
       };
 
@@ -196,7 +211,7 @@ export function useDragResize({
       document.addEventListener("mousemove", handleMove);
       document.addEventListener("mouseup", handleUp);
     },
-    [id, zoomRef, onUpdate, onFocus, renderSnapGuides, clearSnapGuides, activeSnapTargetsRef],
+    [id, zoomRef, onUpdate, onFocus, renderSnapGuides, clearSnapGuides, activeSnapTargetsRef, onLiveRectChange],
   );
 
   const handleEdgeResize = useCallback(
@@ -249,6 +264,7 @@ export function useDragResize({
         el.style.top = `${newY}px`;
         el.style.width = `${newW}px`;
         el.style.height = `${newH}px`;
+        onLiveRectChange?.(id, { x: newX, y: newY, width: newW, height: newH });
       };
 
       const handleUp = () => {
@@ -275,7 +291,11 @@ export function useDragResize({
         if (finalH !== d.origH) updates.height = finalH;
 
         if (Object.keys(updates).length > 0) {
+          onLiveRectChange?.(id, { x: finalX, y: finalY, width: finalW, height: finalH });
           onUpdate(id, updates);
+          requestAnimationFrame(() => onLiveRectChange?.(id, null));
+        } else {
+          onLiveRectChange?.(id, null);
         }
       };
 
@@ -283,7 +303,7 @@ export function useDragResize({
       document.addEventListener("mousemove", handleMove);
       document.addEventListener("mouseup", handleUp);
     },
-    [id, zoomRef, onUpdate, onFocus, minWidth, minHeight],
+    [id, zoomRef, onUpdate, onFocus, minWidth, minHeight, onLiveRectChange],
   );
 
   return { windowRef, handleTitleMouseDown, handleEdgeResize };

@@ -36,6 +36,7 @@ describe("stripSessionWindowFields", () => {
       targetLine: 42,
       targetColumn: 13,
       targetNonce: 7,
+      originTerminalId: "terminal-1",
     };
 
     expect(stripSessionWindowFields(win)).toEqual({
@@ -50,6 +51,7 @@ describe("stripSessionWindowFields", () => {
       zIndex: 1,
       sourcePath: "/project/src/App.tsx",
       viewMode: "file",
+      originTerminalId: "terminal-1",
     });
   });
 });

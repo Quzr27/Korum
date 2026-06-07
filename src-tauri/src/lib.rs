@@ -11,7 +11,7 @@ use agent_status::AgentStatusState;
 use commands::{
     attach_terminal, confirm_app_exit, create_directory, create_file, create_terminal, delete_path,
     detach_terminal, fetch_claude_usage, fetch_codex_usage, get_agent_statuses, get_file_diff,
-    get_git_status, kill_terminal, load_settings, load_state, open_external_url,
+    get_git_file_status, get_git_status, kill_terminal, load_settings, load_state, open_external_url,
     read_code_file_content, read_directory, read_file_content, register_agent_terminal,
     rename_path, resize_terminal, save_settings, save_state, start_watching, stop_watching,
     unregister_agent_terminal, write_terminal,
@@ -170,6 +170,7 @@ pub fn run() {
             confirm_app_exit,
             read_directory,
             get_git_status,
+            get_git_file_status,
             read_file_content,
             read_code_file_content,
             get_file_diff,

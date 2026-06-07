@@ -33,6 +33,60 @@
   pointer-events: none;
 }
 
+.canvas-tethers {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+  --tether-accent: var(--primary);
+}
+
+.canvas-tether-line {
+  stroke: color-mix(in oklch, var(--tether-accent) 78%, white 8%);
+  stroke-width: 1.6px;
+  stroke-linecap: round;
+  stroke-dasharray: 2 11 18 11;
+  stroke-dashoffset: 0;
+  opacity: 0.9;
+  vector-effect: non-scaling-stroke;
+  filter:
+    drop-shadow(0 0 4px color-mix(in oklch, var(--tether-accent) 52%, transparent))
+    drop-shadow(0 0 13px color-mix(in oklch, var(--tether-accent) 24%, transparent));
+  animation: canvas-tether-flow 1.2s linear infinite;
+}
+
+.canvas-tether-arrowhead {
+  fill: color-mix(in oklch, var(--tether-accent) 84%, white 6%);
+  filter: drop-shadow(0 0 6px color-mix(in oklch, var(--tether-accent) 44%, transparent));
+}
+
+.canvas-viewport.panning .canvas-tether-line,
+.canvas-viewport.zooming .canvas-tether-line {
+  animation: none;
+  filter: none;
+}
+
+.canvas-viewport.panning .canvas-tether-arrowhead,
+.canvas-viewport.zooming .canvas-tether-arrowhead {
+  filter: none;
+}
+
+@keyframes canvas-tether-flow {
+  to {
+    stroke-dashoffset: -42;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas-tether-line {
+    animation: none;
+  }
+}
+
 .canvas-snap-guide {
   position: absolute;
   opacity: 0;

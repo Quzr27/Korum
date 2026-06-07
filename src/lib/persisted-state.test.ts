@@ -302,4 +302,59 @@ describe("hydratePersistedState", () => {
     expect(hydrated.zoom).toBe(DEFAULT_VIEWPORT.zoom);
     expect(hydrated.counts).toEqual({ terminal: 0, note: 0, code: 0 });
   });
+
+  it("restores a CodeWindow origin terminal id when the terminal still exists", () => {
+    const hydrated = hydratePersistedState(
+      makeState({
+        windows: [
+          ...makeState().windows,
+          {
+            id: "code-1",
+            type: "code",
+            x: 900,
+            y: 200,
+            width: 820,
+            height: 600,
+            zIndex: 5,
+            title: "App.tsx",
+            workspaceId: "ws-1",
+            sourcePath: "/project/one/src/App.tsx",
+            viewMode: "changes",
+            originTerminalId: "term-1",
+          },
+        ],
+      }),
+    );
+
+    const code = hydrated.windows.find((window) => window.id === "code-1");
+    expect(code).toEqual(expect.objectContaining({
+      type: "code",
+      originTerminalId: "term-1",
+    }));
+  });
+
+  it("drops a CodeWindow origin terminal id when the terminal is missing", () => {
+    const hydrated = hydratePersistedState(
+      makeState({
+        windows: [
+          {
+            id: "code-1",
+            type: "code",
+            x: 900,
+            y: 200,
+            width: 820,
+            height: 600,
+            zIndex: 5,
+            title: "App.tsx",
+            workspaceId: "ws-1",
+            sourcePath: "/project/one/src/App.tsx",
+            viewMode: "changes",
+            originTerminalId: "missing-terminal",
+          },
+        ],
+      }),
+    );
+
+    expect(hydrated.windows[0]).not.toHaveProperty("originTerminalId");
+  });
 });
