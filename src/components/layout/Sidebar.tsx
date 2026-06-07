@@ -74,9 +74,46 @@ import {
 } from "@/components/ui/context-menu";
 import { isPathInsideRoot } from "@/lib/file-tree-reveal";
 import { cn } from "@/lib/utils";
-import type { Workspace, WorkspaceColor, WorkspaceIconKey, WindowKind } from "@/types";
+import { getAgentActivityCssVar } from "@/lib/agent-status";
+import { useAgentActivities } from "@/lib/agent-status-store";
+import type { AgentActivity, Workspace, WorkspaceColor, WorkspaceIconKey, WindowKind } from "@/types";
 import { WORKSPACE_COLORS } from "@/types";
 import FileTree from "@/components/layout/FileTree";
+
+/**
+ * Per-terminal agent status indicator. `working`/`waiting` are the attention
+ * states and render a solid colour; `idle` renders faintly; `unknown` (no
+ * confident read, e.g. a plain shell) renders nothing.
+ */
+function AgentStatusDot({ activity, className }: { activity: AgentActivity | undefined; className?: string }) {
+  if (!activity || activity === "unknown") return null;
+  const label = activity === "working" ? "Agent working" : activity === "waiting" ? "Agent waiting for input" : "Agent idle";
+  return (
+    <span
+      className={cn(
+        "size-1.5 rounded-full shrink-0",
+        activity === "idle" && "opacity-40",
+        (activity === "working" || activity === "waiting") && "agent-status-dot--active",
+        className,
+      )}
+      style={{ backgroundColor: getAgentActivityCssVar(activity) }}
+      role="img"
+      title={label}
+      aria-label={label}
+    />
+  );
+}
+
+/** Most attention-worthy status among a workspace's terminals (for the row when collapsed). */
+function aggregateActivity(activities: Record<string, AgentActivity>, terminalIds: string[]): AgentActivity | undefined {
+  let result: AgentActivity | undefined;
+  for (const id of terminalIds) {
+    const activity = activities[id];
+    if (activity === "waiting") return "waiting";
+    if (activity === "working") result = "working";
+  }
+  return result;
+}
 
 // biome-ignore format: icon map
 const WORKSPACE_ICONS: Record<WorkspaceIconKey, IconSvgElement> = {
@@ -390,6 +427,7 @@ interface WindowItemProps {
   renameValue: string;
   wsColor: string;
   icon: React.ReactNode;
+  activity?: AgentActivity;
   onFocus: () => void;
   onStartRename: () => void;
   onRenameChange: (v: string) => void;
@@ -399,7 +437,7 @@ interface WindowItemProps {
 }
 
 function WindowItem({
-  win, isActive, isRenaming, renameValue, wsColor, icon,
+  win, isActive, isRenaming, renameValue, wsColor, icon, activity,
   onFocus, onStartRename, onRenameChange, onCommitRename, onCancelRename, onDelete,
 }: WindowItemProps) {
   if (isRenaming) {
@@ -440,6 +478,7 @@ function WindowItem({
         >
           {icon}
           <span className="truncate max-w-45">{win.title}</span>
+          <AgentStatusDot activity={activity} className="ml-auto" />
         </Button>
       </ContextMenuTrigger>
       <ContextMenuContent>
@@ -515,6 +554,7 @@ export default function Sidebar({
   const [editColor, setEditColor] = useState<WorkspaceColor>("green");
   const [editIcon, setEditIcon] = useState<WorkspaceIconKey>("code");
 
+  const activities = useAgentActivities();
   const normalizedQuery = useMemo(() => query.trim().toLowerCase(), [query]);
   const activeWs = useMemo(() => workspaces.find((ws) => ws.id === activeWorkspaceId), [workspaces, activeWorkspaceId]);
   const activeWorkspaceFileQuery = activeWs ? (fileQueryByWorkspaceId[activeWs.id] ?? "") : "";
@@ -694,6 +734,10 @@ export default function Sidebar({
               const hasItems = filteredTerminals.length > 0 || filteredNotes.length > 0 || filteredCode.length > 0;
 
               const color = WORKSPACE_COLORS[ws.color];
+              const wsAggregateActivity = aggregateActivity(
+                activities,
+                wsWindows.filter((w) => w.type === "terminal").map((w) => w.id),
+              );
               const workspaceRowReservedWidth = isActive && ws.rootPath ? 72 : 40;
               return (
                 <div key={ws.id} className="flex flex-col">
@@ -756,6 +800,7 @@ export default function Sidebar({
 
                     {/* Right slot: files toggle + count / menu */}
                     <div className="mr-0.5 flex shrink-0 items-center gap-1 pl-1">
+                      {!isExpanded && <AgentStatusDot activity={wsAggregateActivity} />}
                       {isActive && ws.rootPath && (
                         <Button
                           type="button"
@@ -843,6 +888,7 @@ export default function Sidebar({
                           isRenaming={renamingId === w.id}
                           renameValue={renameValue}
                           wsColor={color}
+                          activity={activities[w.id]}
                           icon={<HugeiconsIcon icon={HugeTerminalIcon} size={14} className="shrink-0 opacity-50" />}
                           onFocus={() => onFocusWindow(w.id)}
                           onStartRename={() => startRename(w)}

@@ -105,6 +105,7 @@ There is no checked-in `.env.example` and no app DB layer in the current source.
 - `.claude/rules/persistence-storage.md` - app state/settings persistence, schema ownership, and atomic storage.
 - `.claude/rules/design-system.md` - shadcn, Tailwind, icons, CSS variables, z-index, and UI styling conventions.
 - `.claude/rules/frontend-patterns.md` - React performance, refs, dialogs, local errors, and shared frontend habits.
+- `.claude/rules/performance.md` - canvas motion, tether sync cadence, and single-file git status performance decisions.
 - `.claude/rules/testing-quality.md` - Vitest, Cargo tests, mocks, and verification expectations.
 - `.claude/rules/canvas-engine.md` - pan/zoom canvas, viewport culling, snapping, minimap, and arrange-grid behavior.
 - `.claude/rules/terminal-system.md` - PTY/xterm lifecycle, hydration, live terminal selection, and WKWebView terminal issues.

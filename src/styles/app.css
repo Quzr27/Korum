@@ -222,9 +222,9 @@ body,
   --agent-status-waiting: oklch(0.74 0.18 66);
   --agent-status-waiting-strong: oklch(0.64 0.2 54);
   --agent-status-waiting-halo: color-mix(in oklch, var(--agent-status-waiting) 46%, transparent);
-  --agent-status-idle: oklch(0.66 0.13 240);
-  --agent-status-idle-strong: oklch(0.56 0.15 245);
-  --agent-status-idle-halo: color-mix(in oklch, var(--agent-status-idle) 18%, transparent);
+  --agent-status-idle: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  --agent-status-idle-strong: color-mix(in oklch, var(--muted-foreground) 85%, transparent);
+  --agent-status-idle-halo: color-mix(in oklch, var(--muted-foreground) 12%, transparent);
   --agent-status-unknown: color-mix(in oklch, var(--muted-foreground) 60%, transparent);
   --agent-status-unknown-strong: color-mix(in oklch, var(--muted-foreground) 80%, transparent);
   --agent-status-unknown-halo: color-mix(in oklch, var(--muted-foreground) 10%, transparent);
@@ -280,12 +280,26 @@ body,
   --agent-status-waiting: oklch(0.82 0.18 67);
   --agent-status-waiting-strong: oklch(0.88 0.2 62);
   --agent-status-waiting-halo: color-mix(in oklch, var(--agent-status-waiting) 52%, transparent);
-  --agent-status-idle: oklch(0.72 0.13 244);
-  --agent-status-idle-strong: oklch(0.78 0.15 246);
-  --agent-status-idle-halo: color-mix(in oklch, var(--agent-status-idle) 20%, transparent);
+  --agent-status-idle: color-mix(in oklch, var(--muted-foreground) 78%, transparent);
+  --agent-status-idle-strong: color-mix(in oklch, var(--muted-foreground) 92%, transparent);
+  --agent-status-idle-halo: color-mix(in oklch, var(--muted-foreground) 14%, transparent);
   --agent-status-unknown: color-mix(in oklch, var(--muted-foreground) 64%, transparent);
   --agent-status-unknown-strong: color-mix(in oklch, var(--muted-foreground) 86%, transparent);
   --agent-status-unknown-halo: color-mix(in oklch, var(--muted-foreground) 12%, transparent);
+}
+
+/* Sidebar agent status dots: gently pulse the attention states (working/waiting). */
+@keyframes agent-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.agent-status-dot--active {
+  animation: agent-status-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-status-dot--active {
+    animation: none;
+  }
 }
 
 @layer base {

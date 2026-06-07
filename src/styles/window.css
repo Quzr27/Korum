@@ -50,16 +50,14 @@
   --agent-window-status-halo: var(--agent-status-waiting-halo);
 }
 
-.window[data-agent-activity="idle"] {
-  --agent-window-status: var(--agent-status-idle);
-  --agent-window-status-strong: var(--agent-status-idle-strong);
-  --agent-window-status-halo: var(--agent-status-idle-halo);
-}
-
+/* Idle / unknown are neutral states — no agent halo, just the normal window
+   border (and the active-window shadow). Only working/waiting draw a coloured
+   ring so the canvas stays calm when nothing is actively happening. */
+.window[data-agent-activity="idle"],
 .window[data-agent-activity="unknown"] {
-  --agent-window-status: var(--agent-status-unknown);
-  --agent-window-status-strong: var(--agent-status-unknown-strong);
-  --agent-window-status-halo: var(--agent-status-unknown-halo);
+  --agent-window-status: transparent;
+  --agent-window-status-strong: transparent;
+  --agent-window-status-halo: transparent;
 }
 
 .window-titlebar {
