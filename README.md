@@ -9,7 +9,7 @@ Drag, resize, zoom — organize your workflow spatially instead of switching bet
 
 ![Korum with file tree, code viewer](screenshot-2.png)
 
-> **v0.3.0** — early release. macOS only for now.
+> **v0.4.0** — early release. macOS only for now.
 
 ## Status
 
@@ -19,7 +19,9 @@ Korum is currently in early release. Right now, the focus is stability, persiste
 
 - Infinite pan & zoom canvas with terminal windows
 - Markdown notes alongside terminals
+- **Agent status** — terminals glow green while an AI agent (Claude Code / Codex) is working, amber while it waits for your input; mirrored as sidebar and minimap status dots so you can track sessions across workspaces
 - **Terminal Smart Links** — click http(s) URLs and local file paths from terminal output to open browser links or CodeWindows with line highlights
+- **Diff tethers** — a line on the canvas connects a terminal to the diff window it opened, so you can see which terminal produced which change
 - **File tree sidebar** — per-workspace file browser with .gitignore filtering, git status badges, context menu CRUD, active file reveal, and preserved file search
 - **Code viewer** — read-only file viewer with Shiki syntax highlighting (16 themes), inline diff view, minimap, auto-refresh, and terminal-link line targeting
 - **Magnetic pane snapping** — align terminals, notes, and code windows with zoom-stable guide lines
