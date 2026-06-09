@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Settings01Icon } from "@hugeicons/core-free-icons";
 import { useSettings } from "@/lib/settings-context";
@@ -26,6 +26,10 @@ import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 const BASE_COLORS: readonly BaseColor[] = Object.keys(BASE_COLOR_LABELS) as BaseColor[];
+const RADIUS_LABELS: Record<RadiusPreset, string> = {
+  0.625: "Default",
+  0: "None",
+};
 
 function isBaseColor(value: string): value is BaseColor {
   return (BASE_COLORS as readonly string[]).includes(value);
@@ -93,212 +97,206 @@ export default function SettingsPanel({ dismissVersion = 0 }: SettingsPanelProps
         aria-label="Settings"
         aria-hidden={!open}
         data-slot="settings-panel"
-        className={`app-settings-panel fixed right-3 z-50 flex w-3/4 max-w-sm flex-col rounded-xl border border-border bg-popover text-xs/relaxed text-popover-foreground shadow-2xl shadow-black/25 transition-transform duration-300 ease-out ${open ? "pointer-events-auto translate-x-0" : "pointer-events-none translate-x-[calc(100%+0.75rem)]"}`}
+        className={`app-settings-panel fixed right-3 z-50 flex w-3/4 max-w-sm flex-col rounded-xl border border-border bg-popover text-xs/relaxed text-popover-foreground shadow-[var(--app-panel-shadow)] transition-transform duration-300 ease-out ${open ? "pointer-events-auto translate-x-0" : "pointer-events-none translate-x-[calc(100%+0.75rem)]"}`}
       >
-        <div className="flex flex-col gap-1 p-4">
+        <div className="flex flex-col px-4 pb-2 pt-4">
           <h2 className="font-heading text-sm font-medium text-foreground">
             Settings
           </h2>
-          <p className="text-xs/relaxed text-muted-foreground">
-            Changes apply instantly so the canvas stays visible while you tune it.
-          </p>
         </div>
 
-        <Separator />
-
         <ScrollArea className="min-h-0 flex-1">
-          <div className="flex flex-col gap-4 p-4">
-            <SettingRow label="Mode">
-              <ToggleGroup
-                type="single"
-                value={settings.theme}
-                onValueChange={(value) => {
-                  if (value === "dark" || value === "light") {
-                    update({ theme: value });
-                  }
-                }}
-                variant="outline"
-                size="sm"
-              >
-                <ToggleGroupItem value="dark" aria-label="Dark">
-                  Dark
-                </ToggleGroupItem>
-                <ToggleGroupItem value="light" aria-label="Light">
-                  Light
-                </ToggleGroupItem>
-              </ToggleGroup>
-            </SettingRow>
-
-            <Separator />
-
-            <SettingRow label="Usage Limits">
-              <ToggleGroup
-                type="single"
-                value={settings.showUsageLimits ? "on" : "off"}
-                onValueChange={(value) => {
-                  if (value === "on" || value === "off") {
-                    update({ showUsageLimits: value === "on" });
-                  }
-                }}
-                variant="outline"
-                size="sm"
-              >
-                <ToggleGroupItem value="on" aria-label="Show usage limits">
-                  On
-                </ToggleGroupItem>
-                <ToggleGroupItem value="off" aria-label="Hide usage limits">
-                  Off
-                </ToggleGroupItem>
-              </ToggleGroup>
-            </SettingRow>
-
-            <Separator />
-
-            <SettingRow label="Base Color">
-              <ToggleGroup
-                type="single"
-                value={settings.baseColor}
-                onValueChange={(value) => {
-                  if (isBaseColor(value)) {
-                    update({ baseColor: value });
-                  }
-                }}
-                spacing={2}
-              >
-                {BASE_COLORS.map((color) => (
-                  <ToggleGroupItem
-                    key={color}
-                    value={color}
-                    aria-label={BASE_COLOR_LABELS[color]}
-                    title={BASE_COLOR_LABELS[color]}
-                    className="size-8 rounded-full border border-transparent p-0 hover:bg-transparent data-[state=on]:border-foreground data-[state=on]:bg-transparent"
-                  >
-                    <span
-                      className="size-5 rounded-full"
-                      style={{ backgroundColor: BASE_COLOR_SWATCHES[color] }}
-                    />
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </SettingRow>
-
-            <Separator />
-
-            <SettingRow label="Canvas Atmosphere">
+          <div className="flex flex-col gap-3 px-3.5 pb-3.5 pt-2">
+            <SettingsSection title="General">
               <div className="grid grid-cols-2 gap-2">
-                {CANVAS_ATMOSPHERES.map((atmosphere) => {
-                  const isActive = settings.canvasAtmosphere === atmosphere;
-                  return (
-                    <button
-                      key={atmosphere}
-                      type="button"
-                      className={`relative flex flex-col items-start gap-1.5 rounded-lg border px-2 py-2 text-left transition-all duration-200 cursor-pointer ${isActive ? "border-foreground/40 bg-accent/50" : "border-border hover:border-foreground/30 hover:bg-accent/20"}`}
-                      onClick={() => update({ canvasAtmosphere: atmosphere })}
+                <SettingRow label="Mode">
+                  <ToggleGroup
+                    type="single"
+                    value={settings.theme}
+                    onValueChange={(value) => {
+                      if (value === "dark" || value === "light") {
+                        update({ theme: value });
+                      }
+                    }}
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                  >
+                    <ToggleGroupItem value="dark" aria-label="Dark" className="flex-1">
+                      Dark
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="light" aria-label="Light" className="flex-1">
+                      Light
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </SettingRow>
+
+                <SettingRow label="Usage">
+                  <ToggleGroup
+                    type="single"
+                    value={settings.showUsageLimits ? "on" : "off"}
+                    onValueChange={(value) => {
+                      if (value === "on" || value === "off") {
+                        update({ showUsageLimits: value === "on" });
+                      }
+                    }}
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                  >
+                    <ToggleGroupItem value="on" aria-label="Show usage limits" className="flex-1">
+                      On
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="off" aria-label="Hide usage limits" className="flex-1">
+                      Off
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </SettingRow>
+              </div>
+
+              <SettingRow label="Radius">
+                <ToggleGroup
+                  type="single"
+                  value={String(settings.radius)}
+                  onValueChange={(value) => {
+                    const parsed = Number(value);
+                    if (isRadiusPreset(parsed)) {
+                      update({ radius: parsed });
+                    }
+                  }}
+                  variant="outline"
+                  size="sm"
+                  spacing={2}
+                  className="grid w-full grid-cols-2"
+                >
+                  {RADIUS_PRESETS.map((radius) => (
+                    <ToggleGroupItem
+                      key={radius}
+                      value={String(radius)}
+                      aria-label={RADIUS_LABELS[radius]}
+                      className="h-8 justify-start gap-2 rounded-md border-border/80 px-2.5 data-[state=on]:border-foreground/70 data-[state=on]:bg-foreground/[0.045] dark:data-[state=on]:bg-accent/70"
                     >
-                      <CanvasAtmospherePreview atmosphere={atmosphere} />
-                      <span className={`text-[11px] transition-colors ${isActive ? "font-medium text-foreground" : "text-muted-foreground"}`}>
-                        {CANVAS_ATMOSPHERE_LABELS[atmosphere]}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </SettingRow>
+                      <span
+                        className="size-4 shrink-0 border-2 border-current"
+                        style={{ borderRadius: radius === 0 ? "0px" : "7px" }}
+                        aria-hidden="true"
+                      />
+                      <span>{RADIUS_LABELS[radius]}</span>
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </SettingRow>
+            </SettingsSection>
 
-            <Separator />
+            <SettingsSection title="Canvas">
+              <SettingRow label="Base Color">
+                <ToggleGroup
+                  type="single"
+                  value={settings.baseColor}
+                  onValueChange={(value) => {
+                    if (isBaseColor(value)) {
+                      update({ baseColor: value });
+                    }
+                  }}
+                  spacing={2}
+                  className="w-full justify-between"
+                >
+                  {BASE_COLORS.map((color) => (
+                    <ToggleGroupItem
+                      key={color}
+                      value={color}
+                      aria-label={BASE_COLOR_LABELS[color]}
+                      title={BASE_COLOR_LABELS[color]}
+                      className="size-8 rounded-full border border-transparent p-0 hover:bg-transparent data-[state=on]:border-foreground data-[state=on]:bg-transparent"
+                    >
+                      <span
+                        className="size-5 rounded-full ring-1 ring-black/10 dark:shadow-sm dark:shadow-black/25"
+                        style={{ backgroundColor: BASE_COLOR_SWATCHES[color] }}
+                      />
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </SettingRow>
 
-            <SettingRow label="Radius">
-              <ToggleGroup
-                type="single"
-                value={String(settings.radius)}
-                onValueChange={(value) => {
-                  const parsed = Number(value);
-                  if (isRadiusPreset(parsed)) {
-                    update({ radius: parsed });
-                  }
-                }}
-                variant="outline"
-                size="sm"
-                spacing={1}
-              >
-                {RADIUS_PRESETS.map((radius) => (
-                  <ToggleGroupItem
-                    key={radius}
-                    value={String(radius)}
-                    aria-label={radius === 0 ? "Sharp" : `${radius}rem`}
-                    title={radius === 0 ? "Sharp" : `${radius}rem`}
-                    className="size-7 p-0 data-[state=on]:border-foreground"
-                  >
-                    <div
-                      className="size-3.5 border-2 border-current"
-                      style={{ borderRadius: `${Math.max(radius * 4, 1)}px` }}
-                    />
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </SettingRow>
-
-            <Separator />
-
-            <SettingRow label="Terminal Theme">
-              <div className="rounded-md border">
-                <ScrollArea className="h-48">
-                  <div className="flex flex-col gap-1 p-1">
-                    {TERMINAL_THEMES.map((theme) => (
-                      <Button
-                        key={theme}
+              <SettingRow label="Surface">
+                <div className="grid grid-cols-2 gap-2">
+                  {CANVAS_ATMOSPHERES.map((atmosphere) => {
+                    const isActive = settings.canvasAtmosphere === atmosphere;
+                    return (
+                      <button
+                        key={atmosphere}
                         type="button"
-                        variant={settings.terminalTheme === theme ? "secondary" : "ghost"}
-                        className="h-auto justify-start px-2 py-1.5"
-                        onClick={() => update({ terminalTheme: theme })}
+                        className={`relative flex min-h-14 cursor-pointer flex-col items-start gap-1.5 rounded-md border px-2 py-2 text-left transition-all duration-200 ${isActive ? "border-foreground/45 bg-foreground/[0.045] dark:bg-accent/55" : "border-border/80 bg-background/20 hover:border-foreground/30 hover:bg-foreground/[0.035] dark:hover:bg-accent/25"}`}
+                        onClick={() => update({ canvasAtmosphere: atmosphere })}
                       >
-                        <ThemePreview theme={theme} />
-                        <span className="truncate">{TERMINAL_THEME_LABELS[theme]}</span>
-                      </Button>
-                    ))}
-                  </div>
-                </ScrollArea>
-              </div>
-            </SettingRow>
+                        <CanvasAtmospherePreview atmosphere={atmosphere} />
+                        <span className={`text-[11px] transition-colors ${isActive ? "font-medium text-foreground" : "text-muted-foreground"}`}>
+                          {CANVAS_ATMOSPHERE_LABELS[atmosphere]}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </SettingRow>
+            </SettingsSection>
 
-            <Separator />
+            <SettingsSection title="Terminal">
+              <SettingRow label="Theme">
+                <div className="rounded-md border border-border/80 bg-background/15">
+                  <ScrollArea className="h-44">
+                    <div className="flex flex-col gap-1 p-1">
+                      {TERMINAL_THEMES.map((theme) => (
+                        <Button
+                          key={theme}
+                          type="button"
+                          variant={settings.terminalTheme === theme ? "secondary" : "ghost"}
+                          className="h-auto justify-start px-2 py-1.5"
+                          onClick={() => update({ terminalTheme: theme })}
+                        >
+                          <ThemePreview theme={theme} />
+                          <span className="truncate">{TERMINAL_THEME_LABELS[theme]}</span>
+                        </Button>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </div>
+              </SettingRow>
 
-            <SettingRow label="Terminal Font">
-              <div className="flex flex-col gap-1">
-                {TERMINAL_FONTS.map((font) => (
-                  <Button
-                    key={font}
-                    type="button"
-                    variant={settings.terminalFont === font ? "secondary" : "ghost"}
-                    className="justify-start"
-                    style={{ fontFamily: TERMINAL_FONT_FAMILIES[font] }}
-                    onClick={() => update({ terminalFont: font })}
-                  >
-                    {font}
-                  </Button>
-                ))}
-              </div>
-            </SettingRow>
+              <SettingRow label="Font">
+                <div className="grid grid-cols-1 gap-1">
+                  {TERMINAL_FONTS.map((font) => (
+                    <Button
+                      key={font}
+                      type="button"
+                      variant={settings.terminalFont === font ? "secondary" : "ghost"}
+                      className="h-7 justify-start"
+                      style={{ fontFamily: TERMINAL_FONT_FAMILIES[font] }}
+                      onClick={() => update({ terminalFont: font })}
+                    >
+                      {font}
+                    </Button>
+                  ))}
+                </div>
+              </SettingRow>
 
-            <Separator />
-
-            <SettingRow label={`Font Size: ${fontSizeDraft}px`}>
-              <Slider
-                min={10}
-                max={30}
-                step={1}
-                value={[fontSizeDraft]}
-                onValueChange={(values) => setFontSizeDraft(values[0] ?? settings.terminalFontSize)}
-                onValueCommit={(values) => commitFontSize(values[0])}
-                aria-label="Terminal font size"
-              />
-            </SettingRow>
+              <SettingRow label={`Font Size: ${fontSizeDraft}px`}>
+                <Slider
+                  min={10}
+                  max={30}
+                  step={1}
+                  value={[fontSizeDraft]}
+                  onValueChange={(values) => setFontSizeDraft(values[0] ?? settings.terminalFontSize)}
+                  onValueCommit={(values) => commitFontSize(values[0])}
+                  aria-label="Terminal font size"
+                />
+              </SettingRow>
+            </SettingsSection>
           </div>
         </ScrollArea>
 
         <Separator />
 
-        <div className="mt-auto flex flex-col gap-2 p-4">
+        <div className="mt-auto flex flex-col gap-2 p-3.5">
           <Button
             type="button"
             variant="ghost"
@@ -318,10 +316,29 @@ export default function SettingsPanel({ dismissVersion = 0 }: SettingsPanelProps
   );
 }
 
-function SettingRow({ label, children }: { label: string; children: React.ReactNode }) {
+function SettingsSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
   return (
-    <div className="flex flex-col gap-2.5">
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+    <section className="flex flex-col gap-3 rounded-lg border border-border/70 bg-background/20 p-3 dark:shadow-inner dark:shadow-black/5">
+      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {title}
+      </h3>
+      <div className="flex flex-col gap-3">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function SettingRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {label}
       </span>
       {children}
@@ -340,20 +357,32 @@ function ThemePreview({ theme }: { theme: TerminalTheme }) {
   );
 }
 
-// Simplified preview approximations — intentionally not derived from CANVAS_ATMOSPHERE_VARS
-const ATMOSPHERE_PREVIEW_GRADIENTS: Record<CanvasAtmosphere, string> = {
-  plain: "linear-gradient(180deg, var(--background) 0%, color-mix(in oklch, var(--background) 88%, black 12%) 100%)",
-  studio: "radial-gradient(circle at 18% 20%, color-mix(in oklch, var(--primary) 28%, transparent) 0%, transparent 36%), radial-gradient(circle at 82% 16%, color-mix(in oklch, var(--accent) 36%, transparent) 0%, transparent 34%), linear-gradient(180deg, color-mix(in oklch, var(--background) 90%, var(--card)) 0%, color-mix(in oklch, var(--background) 82%, black 18%) 100%)",
-  aurora: "radial-gradient(circle at 16% 18%, color-mix(in oklch, var(--primary) 36%, transparent) 0%, transparent 34%), radial-gradient(circle at 84% 16%, color-mix(in oklch, var(--sidebar-primary) 34%, transparent) 0%, transparent 32%), radial-gradient(circle at 58% 100%, color-mix(in oklch, var(--accent) 26%, transparent) 0%, transparent 48%), linear-gradient(180deg, color-mix(in oklch, var(--background) 82%, var(--card)) 0%, color-mix(in oklch, var(--background) 70%, black 30%) 100%)",
-  mist: "radial-gradient(circle at 18% 18%, color-mix(in oklch, var(--accent) 28%, transparent) 0%, transparent 38%), radial-gradient(circle at 80% 20%, color-mix(in oklch, white 18%, transparent) 0%, transparent 34%), linear-gradient(180deg, color-mix(in oklch, var(--background) 94%, white 6%) 0%, color-mix(in oklch, var(--background) 86%, var(--card) 14%) 100%)",
-  nocturne: "radial-gradient(circle at 18% 18%, color-mix(in oklch, var(--primary) 24%, transparent) 0%, transparent 34%), radial-gradient(circle at 82% 18%, color-mix(in oklch, var(--accent) 24%, transparent) 0%, transparent 30%), linear-gradient(180deg, color-mix(in oklch, var(--background) 84%, black 16%) 0%, color-mix(in oklch, var(--background) 60%, black 40%) 100%)",
+const SURFACE_PREVIEW_STYLES: Record<CanvasAtmosphere, CSSProperties> = {
+  workbench: {
+    backgroundImage:
+      "linear-gradient(180deg, color-mix(in oklch, var(--background) 88%, var(--card) 12%) 0%, color-mix(in oklch, var(--background) 78%, black 22%) 100%)",
+  },
+  blueprint: {
+    backgroundImage:
+      "linear-gradient(color-mix(in oklch, var(--foreground) 10%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in oklch, var(--foreground) 10%, transparent) 1px, transparent 1px), linear-gradient(180deg, color-mix(in oklch, var(--background) 84%, var(--card) 16%) 0%, color-mix(in oklch, var(--background) 76%, black 24%) 100%)",
+    backgroundSize: "18px 18px, 18px 18px, auto",
+  },
+  draft: {
+    backgroundImage:
+      "linear-gradient(color-mix(in oklch, var(--foreground) 8%, transparent) 1px, transparent 1px), linear-gradient(112deg, transparent 0 49%, color-mix(in oklch, var(--foreground) 7%, transparent) 49.5% 50.5%, transparent 51%), linear-gradient(180deg, color-mix(in oklch, var(--background) 86%, var(--card) 14%) 0%, color-mix(in oklch, var(--background) 82%, black 18%) 100%)",
+    backgroundSize: "100% 10px, 28px 28px, auto",
+  },
+  signal: {
+    backgroundImage:
+      "repeating-linear-gradient(0deg, color-mix(in oklch, var(--foreground) 6%, transparent) 0 1px, transparent 1px 4px), repeating-linear-gradient(90deg, transparent 0 24px, color-mix(in oklch, var(--sidebar-primary) 14%, transparent) 24px 25px, transparent 25px 48px), linear-gradient(180deg, color-mix(in oklch, var(--background) 78%, black 22%) 0%, color-mix(in oklch, var(--background) 66%, black 34%) 100%)",
+  },
 };
 
 function CanvasAtmospherePreview({ atmosphere }: { atmosphere: CanvasAtmosphere }) {
   return (
     <span
       className="relative block h-8 w-full overflow-hidden rounded-sm border"
-      style={{ backgroundImage: ATMOSPHERE_PREVIEW_GRADIENTS[atmosphere] }}
+      style={SURFACE_PREVIEW_STYLES[atmosphere]}
       aria-hidden="true"
     >
       <span

@@ -4,9 +4,9 @@ export type ThemeMode = "light" | "dark";
 export type BaseColor = "neutral" | "zinc" | "stone" | "mauve" | "olive";
 export type TerminalFont = "JetBrains Mono" | "IBM Plex Mono" | "Source Code Pro";
 export type TerminalTheme = "arcadia-midnight" | "tomorrow-night" | "tomorrow-night-eighties" | "oceanic-next" | "one-dark" | "gruvbox-soft" | "gruvbox-medium" | "harmonic-dark" | "materia" | "monokai" | "ocean" | "seti" | "solarized-dark" | "spacemacs" | "atelier-forest" | "afterglow" | "argonaut" | "cobalt2" | "dimmed-monokai" | "dracula" | "duotone-dark" | "spacegray-eighties" | "papercolor-light" | "tomorrow-light" | "one-half-light";
-export type CanvasAtmosphere = "plain" | "studio" | "aurora" | "mist" | "nocturne";
+export type CanvasAtmosphere = "workbench" | "blueprint" | "draft" | "signal";
 export type CodeTheme = "github-dark" | "github-light" | "dracula" | "one-dark-pro" | "nord" | "catppuccin-mocha" | "catppuccin-latte" | "solarized-dark" | "tokyo-night" | "rose-pine" | "monokai" | "vitesse-dark" | "ayu-dark" | "min-dark" | "andromeeda" | "dark-plus";
-export type RadiusPreset = 0 | 0.3 | 0.5 | 0.625 | 0.75 | 1;
+export type RadiusPreset = 0 | 0.625;
 export type ZoomSpeed = 0.5 | 1 | 1.5 | 2 | 3;
 
 export interface Settings {
@@ -28,9 +28,9 @@ export const DEFAULT_SETTINGS: Settings = {
   radius: 0.625,
   terminalFont: "IBM Plex Mono",
   terminalFontSize: 14,
-  terminalTheme: "arcadia-midnight",
+  terminalTheme: "tomorrow-night",
   codeTheme: "github-dark",
-  canvasAtmosphere: "studio",
+  canvasAtmosphere: "workbench",
   zoomSpeed: 1,
   showUsageLimits: true,
 };
@@ -83,29 +83,28 @@ export const CODE_THEME_BG: Record<CodeTheme, string> = {
 export const ZOOM_SPEED_OPTIONS: readonly ZoomSpeed[] = [0.5, 1, 1.5, 2, 3];
 
 export const BASE_COLOR_LABELS: Record<BaseColor, string> = {
-  neutral: "Neutral", zinc: "Slate", stone: "Amber", mauve: "Violet", olive: "Emerald",
+  neutral: "Neutral", zinc: "Slate", stone: "Graphite", mauve: "Violet", olive: "Sage",
 };
 
 export const BASE_COLOR_SWATCHES: Record<BaseColor, string> = {
-  neutral: "#a3a3a3",
-  zinc: "#7ea9d3",
-  stone: "#e1a95f",
-  mauve: "#bf84f6",
-  olive: "#5fc59a",
+  neutral: "#a8a8a8",
+  zinc: "#8fa3b8",
+  stone: "#747a82",
+  mauve: "#9b8ac2",
+  olive: "#8faa9b",
 };
 
 export const CANVAS_ATMOSPHERE_LABELS: Record<CanvasAtmosphere, string> = {
-  plain: "Plain",
-  studio: "Studio",
-  aurora: "Aurora",
-  mist: "Mist",
-  nocturne: "Nocturne",
+  workbench: "Workbench",
+  blueprint: "Blueprint",
+  draft: "Draft",
+  signal: "Signal",
 };
 
 export const CANVAS_ATMOSPHERES: readonly CanvasAtmosphere[] = Object.keys(
   CANVAS_ATMOSPHERE_LABELS,
 ) as CanvasAtmosphere[];
 
-export const RADIUS_PRESETS: readonly RadiusPreset[] = [0, 0.3, 0.5, 0.625, 0.75, 1];
+export const RADIUS_PRESETS: readonly RadiusPreset[] = [0.625, 0];
 
 export type CssVarMap = Record<string, string>;

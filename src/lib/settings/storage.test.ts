@@ -37,12 +37,12 @@ describe("validateSettings", () => {
     const input: Settings = {
       theme: "light",
       baseColor: "zinc",
-      radius: 0.5,
+      radius: 0.625,
       terminalFont: "IBM Plex Mono",
       terminalFontSize: 16,
       terminalTheme: "dracula",
       codeTheme: "dracula",
-      canvasAtmosphere: "aurora",
+      canvasAtmosphere: "blueprint",
       zoomSpeed: 2,
       showUsageLimits: true,
     };
@@ -53,17 +53,17 @@ describe("validateSettings", () => {
     const input = {
       theme: "light",
       baseColor: "INVALID",
-      radius: 0.5,
+      radius: 0.625,
       terminalFont: "IBM Plex Mono",
       terminalFontSize: 999, // out of range
       terminalTheme: "dracula",
-      canvasAtmosphere: "mist",
+      canvasAtmosphere: "draft",
       zoomSpeed: 2,
     };
     const result = validateSettings(input);
     expect(result.theme).toBe("light");
     expect(result.baseColor).toBe(DEFAULT_SETTINGS.baseColor); // fallback
-    expect(result.radius).toBe(0.5);
+    expect(result.radius).toBe(0.625);
     expect(result.terminalFontSize).toBe(DEFAULT_SETTINGS.terminalFontSize); // fallback
     expect(result.terminalTheme).toBe("dracula");
   });
@@ -85,9 +85,11 @@ describe("validateSettings", () => {
   });
 
   it("validates radius field", () => {
-    for (const r of [0, 0.3, 0.5, 0.625, 0.75, 1]) {
+    for (const r of [0, 0.625]) {
       expect(validateSettings({ radius: r }).radius).toBe(r);
     }
+    expect(validateSettings({ radius: 0.5 }).radius).toBe(DEFAULT_SETTINGS.radius);
+    expect(validateSettings({ radius: 1 }).radius).toBe(DEFAULT_SETTINGS.radius);
     expect(validateSettings({ radius: 0.4 }).radius).toBe(DEFAULT_SETTINGS.radius);
     expect(validateSettings({ radius: "0.5" }).radius).toBe(DEFAULT_SETTINGS.radius);
   });
@@ -160,8 +162,13 @@ describe("validateSettings", () => {
   });
 
   it("validates canvasAtmosphere field", () => {
-    for (const atmosphere of ["plain", "studio", "aurora", "mist", "nocturne"]) {
+    for (const atmosphere of ["workbench", "blueprint", "draft", "signal"]) {
       expect(validateSettings({ canvasAtmosphere: atmosphere }).canvasAtmosphere).toBe(atmosphere);
+    }
+    for (const legacyAtmosphere of ["plain", "studio", "aurora", "mist", "nocturne"]) {
+      expect(validateSettings({ canvasAtmosphere: legacyAtmosphere }).canvasAtmosphere).toBe(
+        DEFAULT_SETTINGS.canvasAtmosphere,
+      );
     }
     expect(validateSettings({ canvasAtmosphere: "sunset" }).canvasAtmosphere).toBe(
       DEFAULT_SETTINGS.canvasAtmosphere,
@@ -181,7 +188,7 @@ describe("parseSettings", () => {
       terminalFontSize: 13,
       terminalTheme: "oceanic-next",
       codeTheme: "github-dark",
-      canvasAtmosphere: "studio",
+      canvasAtmosphere: "signal",
       zoomSpeed: 1,
       showUsageLimits: true,
     };
@@ -203,7 +210,7 @@ describe("parseSettings", () => {
       terminalFont: "JetBrains Mono",
       terminalFontSize: 13,
       terminalTheme: "oceanic-next",
-      canvasAtmosphere: "studio",
+      canvasAtmosphere: "signal",
       zoomSpeed: 1,
     };
     const { settings, isFullyValid } = parseSettings(input);
@@ -236,7 +243,7 @@ describe("parseSettings", () => {
       // terminalFont omitted
       terminalFontSize: 13,
       terminalTheme: "oceanic-next",
-      canvasAtmosphere: "studio",
+      canvasAtmosphere: "signal",
       zoomSpeed: 1,
     };
     const { isFullyValid } = parseSettings(input);
@@ -251,7 +258,7 @@ describe("parseSettings", () => {
       terminalFont: "Menlo", // legacy font that gets migrated
       terminalFontSize: 13,
       terminalTheme: "oceanic-next",
-      canvasAtmosphere: "studio",
+      canvasAtmosphere: "signal",
       zoomSpeed: 1,
     };
     const { settings, isFullyValid } = parseSettings(input);
@@ -267,7 +274,7 @@ describe("parseSettings", () => {
       terminalFont: "JetBrains Mono",
       terminalFontSize: 13,
       terminalTheme: "nord",
-      canvasAtmosphere: "studio",
+      canvasAtmosphere: "signal",
       zoomSpeed: 1,
     };
     const { settings, isFullyValid } = parseSettings(input);
@@ -279,12 +286,12 @@ describe("parseSettings", () => {
     const input: Settings = {
       theme: "light",
       baseColor: "stone",
-      radius: 0.75,
+      radius: 0,
       terminalFont: "Source Code Pro",
       terminalFontSize: 18,
       terminalTheme: "dracula",
       codeTheme: "monokai",
-      canvasAtmosphere: "nocturne",
+      canvasAtmosphere: "blueprint",
       zoomSpeed: 1.5,
       showUsageLimits: true,
     };
@@ -341,11 +348,11 @@ describe("localStorage settings", () => {
   });
 
   it("saveBootstrapSettings + loadBootstrapSettings round-trip", () => {
-    const settings: Settings = { ...DEFAULT_SETTINGS, theme: "light", radius: 1 };
+    const settings: Settings = { ...DEFAULT_SETTINGS, theme: "light", radius: 0 };
     saveBootstrapSettings(settings);
     const loaded = loadBootstrapSettings();
     expect(loaded.theme).toBe("light");
-    expect(loaded.radius).toBe(1);
+    expect(loaded.radius).toBe(0);
   });
 
   it("loadBootstrapSettings falls back to legacy key", () => {
