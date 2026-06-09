@@ -290,7 +290,7 @@ interface CreateWorkspaceDialogProps {
 export function CreateWorkspaceDialog({ open, onOpenChange, onCreateWorkspace }: CreateWorkspaceDialogProps) {
   const [folderPath, setFolderPath] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [color, setColor] = useState<WorkspaceColor>("blue");
+  const [color, setColor] = useState<WorkspaceColor>("default");
   const [icon, setIcon] = useState<WorkspaceIconKey>("code");
   const [nameManuallyEdited, setNameManuallyEdited] = useState(false);
   const pickerActiveRef = useRef(false);
@@ -299,7 +299,7 @@ export function CreateWorkspaceDialog({ open, onOpenChange, onCreateWorkspace }:
     pickerActiveRef.current = false;
     setFolderPath(null);
     setName("");
-    setColor("blue");
+    setColor("default");
     setIcon("code");
     setNameManuallyEdited(false);
   }, []);
@@ -556,7 +556,7 @@ export default function Sidebar({
   const [openMenuWsId, setOpenMenuWsId] = useState<string | null>(null);
 
   const [editName, setEditName] = useState("");
-  const [editColor, setEditColor] = useState<WorkspaceColor>("green");
+  const [editColor, setEditColor] = useState<WorkspaceColor>("default");
   const [editIcon, setEditIcon] = useState<WorkspaceIconKey>("code");
 
   const activities = useAgentActivities();
@@ -711,7 +711,7 @@ export default function Sidebar({
         aria-hidden={collapsed}
         inert={collapsed}
         className={cn(
-          "glass fixed inset-y-0 left-0 z-40 w-72 flex flex-col shadow-2xl shadow-black/25 overflow-hidden",
+          "glass fixed inset-y-0 left-0 z-40 w-72 flex flex-col shadow-[var(--app-panel-shadow)] overflow-hidden",
           "transition-transform duration-300 ease-out will-change-transform",
           sidebarDrawerOpen ? "rounded-r-none" : "rounded-r-xl",
           collapsed ? "pointer-events-none -translate-x-[calc(100%+0.75rem)]" : "translate-x-0",
@@ -743,7 +743,7 @@ export default function Sidebar({
         <Separator />
 
         <ScrollArea className="flex-1 min-h-0">
-          <div className="px-2 py-2 flex flex-col gap-0.5">
+          <div className="px-3 py-2 flex flex-col gap-0.5">
             {workspaces.map((ws) => {
               const isActive = ws.id === activeWorkspaceId;
               const isExpanded = !collapsedIds.has(ws.id);
@@ -766,8 +766,8 @@ export default function Sidebar({
                     className={cn(
                       "group/ws flex w-full min-w-0 items-center overflow-hidden rounded-lg transition-colors",
                       isActive
-                        ? "bg-sidebar-accent"
-                        : "hover:bg-sidebar-accent/50",
+                        ? "bg-foreground/[0.055] dark:bg-sidebar-accent"
+                        : "hover:bg-foreground/[0.04] dark:hover:bg-sidebar-accent/50",
                     )}
                   >
                     {/* Chevron */}
@@ -995,7 +995,7 @@ export default function Sidebar({
           className={cn(
             "sidebar-file-drawer glass-subtle fixed inset-y-0 left-[18rem] z-39 rounded-r-xl flex flex-col overflow-hidden text-foreground",
             "border-border/30",
-            "shadow-xl shadow-black/15",
+            "shadow-[var(--app-drawer-shadow)]",
             "transition-transform duration-300 ease-out",
             sidebarDrawerOpen
               ? "translate-x-0"

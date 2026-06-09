@@ -51,7 +51,7 @@ function sanitizeWorkspace(value: unknown): Workspace | null {
     return null;
   }
 
-  const color = VALID_COLORS.has(value.color) ? (value.color as WorkspaceColor) : "blue";
+  const color = VALID_COLORS.has(value.color) ? (value.color as WorkspaceColor) : "default";
   const icon = VALID_ICONS.has(value.icon) ? (value.icon as WorkspaceIconKey) : "terminal";
 
   return {

@@ -10,16 +10,23 @@
   --agent-window-status: transparent;
   --agent-window-status-strong: transparent;
   --agent-window-status-halo: transparent;
+  --window-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  --window-shadow-active: 0 12px 40px rgba(0, 0, 0, 0.55);
   box-shadow:
     0 0 0 1px var(--term-border, var(--border)),
-    0 6px 20px rgba(0, 0, 0, 0.35);
+    var(--window-shadow);
   transition: box-shadow 0.15s ease;
+}
+
+:root:not(.dark) .window {
+  --window-shadow: 0 14px 28px rgba(17, 24, 39, 0.16), 0 2px 5px rgba(17, 24, 39, 0.08);
+  --window-shadow-active: 0 18px 34px rgba(17, 24, 39, 0.2), 0 2px 6px rgba(17, 24, 39, 0.1);
 }
 
 .window[data-active="true"] {
   box-shadow:
     0 0 0 1px var(--term-border, var(--border)),
-    0 12px 40px rgba(0, 0, 0, 0.55);
+    var(--window-shadow-active);
 }
 
 .window[data-agent-activity] {
@@ -27,7 +34,7 @@
     0 0 0 1px var(--term-border, var(--border)),
     0 0 0 2px color-mix(in oklch, var(--agent-window-status) 70%, transparent),
     0 0 24px var(--agent-window-status-halo),
-    0 6px 20px rgba(0, 0, 0, 0.35);
+    var(--window-shadow);
 }
 
 .window[data-agent-activity][data-active="true"] {
@@ -35,7 +42,7 @@
     0 0 0 1px var(--term-border, var(--border)),
     0 0 0 2px var(--agent-window-status-strong),
     0 0 30px var(--agent-window-status-halo),
-    0 12px 40px rgba(0, 0, 0, 0.55);
+    var(--window-shadow-active);
 }
 
 .window[data-agent-activity="working"] {

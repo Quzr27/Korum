@@ -63,7 +63,7 @@ export type WindowUpdatable =
 /** Resize handle edge/corner directions. */
 export type ResizeEdge = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
-export type WorkspaceColor = "green" | "blue" | "orange" | "red" | "purple" | "yellow" | "pink" | "cyan";
+export type WorkspaceColor = "default" | "green" | "blue" | "orange" | "red" | "purple" | "yellow" | "pink" | "cyan";
 export type WorkspaceIconKey = "code" | "terminal" | "rocket" | "star" | "globe" | "home" | "folder" | "fire" | "diamond" | "bug" | "coffee" | "crown" | "git" | "api" | "database" | "server" | "cpu" | "cloud" | "shield" | "package" | "layers" | "dashboard" | "target" | "wrench";
 
 export interface Workspace {
@@ -148,6 +148,7 @@ export interface CodexUsageResponse {
 }
 
 export const WORKSPACE_COLORS: Record<WorkspaceColor, string> = {
+  default: "var(--foreground)",
   green: "#2dcf67",
   blue: "#58a6ff",
   orange: "#F59E0B",

@@ -940,7 +940,7 @@ export default function App() {
       const ws: Workspace = {
         id: crypto.randomUUID(),
         name: "Scratch",
-        color: "blue",
+        color: "default",
         icon: "terminal",
       };
       addWorkspace(ws);

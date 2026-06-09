@@ -100,7 +100,7 @@ describe("initializeSettings", () => {
 
   it("falls back to localStorage when Rust load fails during migration", async () => {
     const invokeSpy = vi.spyOn(tauriCore, "invoke");
-    const localSettings = { ...DEFAULT_SETTINGS, radius: 1, terminalFont: "IBM Plex Mono" } as const;
+    const localSettings = { ...DEFAULT_SETTINGS, radius: 0, terminalFont: "IBM Plex Mono" } as const;
     localStorage.setItem("korum-settings", JSON.stringify(localSettings));
     tauriCoreMock.__setInvokeResult("save_settings", undefined);
 
@@ -139,7 +139,7 @@ describe("flushPendingSettingsSave", () => {
     expect(latestContext).not.toBeNull();
 
     await act(async () => {
-      latestContext?.update({ theme: "light", radius: 1 });
+      latestContext?.update({ theme: "light", radius: 0 });
     });
     await flushReactWork();
     await act(async () => {
@@ -149,7 +149,7 @@ describe("flushPendingSettingsSave", () => {
     const saveCalls = invokeSpy.mock.calls.filter((call) => call[0] === "save_settings");
     expect(saveCalls.length).toBeGreaterThan(0);
     expect(saveCalls[saveCalls.length - 1]?.[1]).toEqual({
-      settings: expect.objectContaining({ theme: "light", radius: 1 }),
+      settings: expect.objectContaining({ theme: "light", radius: 0 }),
     });
   });
 });

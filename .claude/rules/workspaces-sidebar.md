@@ -10,10 +10,11 @@ paths:
 
 # Workspaces & Sidebar
 
-- Workspaces have `id`, `name`, `color`, `icon`, and optional `rootPath`.
+- Workspaces have `id`, `name`, `color`, `icon`, and optional `rootPath`; the `default` workspace color uses the semantic `--foreground` token rather than a hardcoded white.
 - Folder-first workspace creation uses the native dialog plugin; project folder basename becomes the default workspace name.
 - New terminals use workspace `rootPath` as initial cwd when present.
 - Sidebar owns workspace tree UI, workspace edit/delete dialogs, file drawer state, filtering, and window list navigation.
+- Keep the filter input and workspace list aligned on the x-axis (`px-3` for both chrome areas); active workspace rows should not visually drift from the filter edge.
 - `SidebarWindow` projections exclude geometry so drag/resize/focus does not force sidebar re-renders.
 - Sidebar click on a window switches to its workspace, focuses the window, and zooms/navigates canvas as needed.
 - The file drawer is per-workspace and stored in localStorage under `korum-sidebar-ui`, not Rust settings.
