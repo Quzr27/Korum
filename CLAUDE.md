@@ -74,6 +74,7 @@ There is no checked-in `.env.example` and no app DB layer in the current source.
 - Iconify CDN fetches are blocked by CSP; `main.tsx` must register the bundled Material icon collection.
 - `git2` depends on OpenSSL; keep `vendored-openssl` for cross-architecture macOS release builds.
 - Release behavior can diverge from dev; test `bunx tauri build` before tagging release changes.
+- DMG installer: if `.background` / `.VolumeIcon.icns` icons (or a white gap when the window is stretched) appear in the installer window, it is only because Finder's "show hidden files" (⌘⇧.) is enabled — those are dot-prefixed support files revealed by that toggle. Normal users (toggle off) see a clean window; this is standard macOS behavior, not a packaging bug, and no DMG tool fully hides it under show-hidden. The DMG background image must stay exactly the window size (660x400) — a wider image adds a horizontal scrollbar. See `build-release-ci.md`.
 - `LP/` is a separate static landing page and currently has independent release copy.
 
 ## Tooling
