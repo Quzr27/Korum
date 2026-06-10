@@ -170,24 +170,35 @@ export default memo(function CodeWindow({
     return () => { cancelled = true; };
   }, [win.sourcePath, win.viewMode, workspaceRoot]);
 
-  // Re-read on file change (synchronous unlisten ref pattern)
+  // Re-read on file change (synchronous unlisten ref pattern).
+  // Debounced: rapid watcher bursts (e.g. a build writing many files) collapse into
+  // one re-read. The workspace-root filter runs BEFORE scheduling so cross-workspace
+  // events are discarded immediately with no timer overhead.
   useEffect(() => {
     let cancelled = false;
     let unlistenFn: (() => void) | null = null;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     listen<string>("file-tree-changed", (event) => {
       if (cancelled) return;
       // Only react to changes in our workspace root (avoid cross-workspace reloads)
       if (workspaceRoot && event.payload !== workspaceRoot) return;
-      requestIdRef.current += 1;
-      const thisRequest = requestIdRef.current;
-      readContentForRequest(thisRequest, () => cancelled, false);
 
-      if (win.viewMode === "changes" && workspaceRoot) {
-        invoke<DiffLine[]>("get_file_diff", { path: win.sourcePath, root: workspaceRoot })
-          .then((lines) => { if (!cancelled && requestIdRef.current === thisRequest) setDiffLines(lines); })
-          .catch(() => { if (!cancelled && requestIdRef.current === thisRequest) setDiffLines(null); });
-      }
+      // Coalesce rapid events — trailing edge, 300ms
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        if (cancelled) return;
+        requestIdRef.current += 1;
+        const thisRequest = requestIdRef.current;
+        readContentForRequest(thisRequest, () => cancelled, false);
+
+        if (win.viewMode === "changes" && workspaceRoot) {
+          invoke<DiffLine[]>("get_file_diff", { path: win.sourcePath, root: workspaceRoot })
+            .then((lines) => { if (!cancelled && requestIdRef.current === thisRequest) setDiffLines(lines); })
+            .catch(() => { if (!cancelled && requestIdRef.current === thisRequest) setDiffLines(null); });
+        }
+      }, 300);
     }).then((fn) => {
       if (cancelled) fn(); // already unmounted — clean up immediately
       else unlistenFn = fn;
@@ -195,6 +206,10 @@ export default memo(function CodeWindow({
 
     return () => {
       cancelled = true;
+      if (debounceTimer !== null) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
       unlistenFn?.();
     };
   }, [readContentForRequest, win.sourcePath, win.viewMode, workspaceRoot]);

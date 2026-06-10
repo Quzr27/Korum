@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useSettings } from "@/lib/settings-context";
-import { getXtermTheme } from "@/lib/settings";
+import { getXtermTheme, TERMINAL_FONT_FAMILIES } from "@/lib/settings";
 import { useXtermSession } from "@/lib/xterm-session";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
@@ -203,6 +203,39 @@ export default memo(function TerminalWindow({
     onOpenFileLink(win.workspaceId, id, filePath, line, column);
   }, [id, onOpenFileLink, win.workspaceId]);
 
+  // ── Static preview for detached terminals ──
+  // At overview zooms most terminals stay detached (no xterm instance); the
+  // window shows either the DOM ghost left by the last detach, or this
+  // plain-text tail of the Rust replay buffer for never-attached terminals.
+  const [previewText, setPreviewText] = useState<string | null>(null);
+  const [hasGhost, setHasGhost] = useState(false);
+
+  useEffect(() => {
+    if (!isPtyReady || shouldAttach || hasGhost) return;
+    const ptyId = ptyIdRef.current;
+    if (!ptyId) return;
+    let cancelled = false;
+    let retryTimer: number | null = null;
+    const fetchPreview = (allowRetry: boolean) => {
+      invoke<string>("get_terminal_preview", { id: ptyId, maxLines: 40 })
+        .then((text) => {
+          if (cancelled) return;
+          if (text) {
+            setPreviewText(text);
+          } else if (allowRetry) {
+            // Freshly spawned shell may not have printed its prompt yet.
+            retryTimer = window.setTimeout(() => fetchPreview(false), 600);
+          }
+        })
+        .catch(() => {});
+    };
+    fetchPreview(true);
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [isPtyReady, shouldAttach, hasGhost]);
+
   // ── xterm session (Effect B + settings/focus/resize effects) ──
   const { termInstanceRef, isSessionReady } = useXtermSession({
     id,
@@ -226,6 +259,7 @@ export default memo(function TerminalWindow({
     workspaceRoot,
     onOpenFileLink: handleOpenFileLink,
     onSpawnError: setSpawnError,
+    onGhosted: setHasGhost,
   });
 
   // Reopen after error — kill old PTY, trigger respawn via Effect A
@@ -317,6 +351,20 @@ export default memo(function TerminalWindow({
 
           <div className="window-content" onMouseDown={() => termInstanceRef.current?.focus()}>
             <div ref={termRef} className="terminal-container" style={spawnError ? { pointerEvents: "none" } : undefined} />
+            {!isSessionReady && !spawnError && isPtyReady && !hasGhost && previewText && (
+              <pre
+                className="terminal-preview"
+                aria-hidden="true"
+                translate="no"
+                style={{
+                  color: terminalTheme.foreground,
+                  fontFamily: TERMINAL_FONT_FAMILIES[settings.terminalFont],
+                  fontSize: settings.terminalFontSize,
+                }}
+              >
+                {previewText}
+              </pre>
+            )}
             {!isSessionReady && !spawnError && !isPtyReady && (
               <div className="terminal-pending-overlay">
                 <p className="terminal-error-text">{pendingMessage}</p>

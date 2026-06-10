@@ -5,8 +5,13 @@ const VIEWPORT_BUFFER_PX = 480;
 const KEEP_ALIVE_MS = 4_000;
 const MAX_LIVE_TERMINALS_ZOOMED_IN = 16;
 const MAX_LIVE_TERMINALS_DEFAULT = 12;
-// At low zoom, canvases are tiny (low GPU cost) and user sees many terminals
-const MAX_LIVE_TERMINALS_ZOOMED_OUT = 24;
+// Overview zooms: each live xterm costs a full attach (instance + font
+// measure + fit + snapshot restore + buffer drain) and panning reshuffles the
+// distance-sorted budget slice, so generous budgets churn constantly. Below
+// ~0.45 the text is unreadable anyway — detached terminals show the static
+// Rust-backed preview / ghost instead, so only the active one stays live.
+const MAX_LIVE_TERMINALS_OVERVIEW = 8;
+const MAX_LIVE_TERMINALS_FAR_OVERVIEW = 2;
 
 export interface LiveTerminalSelectionInput {
   windows: WindowState[];
@@ -37,7 +42,8 @@ function getLiveTerminalBudget(zoom: number, candidateCount: number): number {
   if (candidateCount <= 6) return candidateCount;
   if (zoom >= 0.95) return Math.min(candidateCount, MAX_LIVE_TERMINALS_ZOOMED_IN);
   if (zoom >= 0.7) return Math.min(candidateCount, MAX_LIVE_TERMINALS_DEFAULT);
-  return Math.min(candidateCount, MAX_LIVE_TERMINALS_ZOOMED_OUT);
+  if (zoom >= 0.45) return Math.min(candidateCount, MAX_LIVE_TERMINALS_OVERVIEW);
+  return Math.min(candidateCount, MAX_LIVE_TERMINALS_FAR_OVERVIEW);
 }
 
 function getDistanceToViewportCenter(

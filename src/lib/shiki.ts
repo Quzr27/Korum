@@ -1,4 +1,5 @@
 import { createHighlighter, type BundledLanguage, type BundledTheme, type Highlighter, type ThemedToken } from "shiki";
+import { createTokenLRU } from "./token-lru";
 
 let highlighterPromise: Promise<Highlighter> | null = null;
 const loadedLangs = new Set<string>();
@@ -56,14 +57,18 @@ async function ensureTheme(hl: Highlighter, theme: string): Promise<boolean> {
   return promise;
 }
 
-/**
- * Tokenize code into lines of themed tokens for custom rendering.
- * Loads language grammar and theme on demand.
- */
-export async function tokenizeCode(
+// Token cache: code windows re-tokenize on every viewport re-entry and on
+// watcher-driven re-reads even when content is unchanged. Tokens are immutable
+// once produced, so cached arrays are shared safely across consumers. Budget
+// is in bytes of source content (~6MB ≈ a dozen large files).
+const TOKEN_CACHE_MAX_BYTES = 6_000_000;
+const tokenCache = createTokenLRU<ThemedToken[][]>(TOKEN_CACHE_MAX_BYTES);
+const inflightTokenizations = new Map<string, Promise<ThemedToken[][]>>();
+
+async function tokenizeUncached(
   code: string,
   lang: string,
-  theme: string = "github-dark",
+  theme: string,
 ): Promise<ThemedToken[][]> {
   const hl = await getHighlighter();
 
@@ -80,4 +85,34 @@ export async function tokenizeCode(
 
   const result = hl.codeToTokens(code, { lang: resolvedLang, theme: resolvedTheme });
   return result.tokens;
+}
+
+/**
+ * Tokenize code into lines of themed tokens for custom rendering.
+ * Loads language grammar and theme on demand. Results are cached by
+ * (lang, theme, content) and concurrent identical requests are deduplicated,
+ * so window remounts and unchanged-content refreshes skip tokenization.
+ */
+export function tokenizeCode(
+  code: string,
+  lang: string,
+  theme: string = "github-dark",
+): Promise<ThemedToken[][]> {
+  const key = `${lang}\u0000${theme}\u0000${code}`;
+
+  const cached = tokenCache.get(key);
+  if (cached) return Promise.resolve(cached);
+
+  let pending = inflightTokenizations.get(key);
+  if (!pending) {
+    pending = tokenizeUncached(code, lang, theme)
+      .then((tokens) => {
+        tokenCache.set(key, tokens, code.length);
+        return tokens;
+      })
+      .finally(() => inflightTokenizations.delete(key));
+    inflightTokenizations.set(key, pending);
+  }
+
+  return pending;
 }
