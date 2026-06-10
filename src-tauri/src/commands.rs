@@ -60,6 +60,15 @@ pub fn kill_terminal(state: State<'_, PtyState>, id: String) -> Result<(), Strin
 }
 
 #[tauri::command]
+pub fn get_terminal_preview(
+    state: State<'_, PtyState>,
+    id: String,
+    max_lines: Option<usize>,
+) -> Result<String, String> {
+    state.preview(&id, max_lines.unwrap_or(40).min(200))
+}
+
+#[tauri::command]
 pub fn register_agent_terminal(
     app: tauri::AppHandle,
     state: State<'_, AgentStatusState>,
@@ -162,8 +171,10 @@ pub async fn fetch_codex_usage() -> Result<crate::codex_usage::CodexUsageRespons
 // ── Storage commands ──
 
 #[tauri::command]
-pub fn save_state(app: tauri::AppHandle, state: serde_json::Value) -> Result<(), String> {
-    crate::storage::save_state(&app, &state)
+pub async fn save_state(app: tauri::AppHandle, state: serde_json::Value) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::storage::save_state(&app, &state))
+        .await
+        .map_err(|e| format!("save_state task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -172,8 +183,13 @@ pub fn load_state(app: tauri::AppHandle) -> Result<Option<serde_json::Value>, St
 }
 
 #[tauri::command]
-pub fn save_settings(app: tauri::AppHandle, settings: serde_json::Value) -> Result<(), String> {
-    crate::storage::save_settings(&app, &settings)
+pub async fn save_settings(
+    app: tauri::AppHandle,
+    settings: serde_json::Value,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::storage::save_settings(&app, &settings))
+        .await
+        .map_err(|e| format!("save_settings task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -194,11 +210,15 @@ pub fn confirm_app_exit(
 // ── File tree commands ──
 
 #[tauri::command]
-pub fn read_directory(
+pub async fn read_directory(
     path: String,
     show_ignored: Option<bool>,
 ) -> Result<Vec<crate::file_tree::FileEntry>, String> {
-    crate::file_tree::read_directory(&path, show_ignored.unwrap_or(false))
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::file_tree::read_directory(&path, show_ignored.unwrap_or(false))
+    })
+    .await
+    .map_err(|e| format!("read_directory task failed: {e}"))?
 }
 
 #[tauri::command]

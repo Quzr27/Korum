@@ -47,7 +47,7 @@ describe("selectLiveTerminalIds", () => {
     expect(result.liveTerminalIds.has("visible")).toBe(true);
   });
 
-  it("caps the number of live terminals when zoomed out", () => {
+  it("caps the number of live terminals at overview zoom", () => {
     const windows = Array.from({ length: 10 }, (_, index) =>
       makeTerminal(`term-${index}`, index * 300, 0, index),
     );
@@ -64,7 +64,48 @@ describe("selectLiveTerminalIds", () => {
       now: 2_000,
     });
 
-    expect(result.liveTerminalIds.size).toBe(10); // all 10 fit within zoomed-out budget (24)
+    expect(result.liveTerminalIds.size).toBe(8); // overview budget (0.45–0.7)
+  });
+
+  it("keeps only the active terminal and one neighbor live at far-overview zoom", () => {
+    const windows = Array.from({ length: 30 }, (_, index) =>
+      makeTerminal(`term-${index}`, (index % 6) * 300, Math.floor(index / 6) * 250, index),
+    );
+
+    const result = selectLiveTerminalIds({
+      windows,
+      activeWorkspaceId: "ws-a",
+      activeWindowId: "term-17",
+      pan: { x: 0, y: 0 },
+      zoom: 0.3,
+      viewportWidth: 3000,
+      viewportHeight: 1600,
+      keepAliveUntil: {},
+      now: 2_000,
+    });
+
+    expect(result.liveTerminalIds.size).toBe(2); // far-overview budget
+    expect(result.liveTerminalIds.has("term-17")).toBe(true); // active always wins
+  });
+
+  it("keeps small terminal counts fully live regardless of zoom", () => {
+    const windows = Array.from({ length: 6 }, (_, index) =>
+      makeTerminal(`term-${index}`, index * 300, 0, index),
+    );
+
+    const result = selectLiveTerminalIds({
+      windows,
+      activeWorkspaceId: "ws-a",
+      activeWindowId: null,
+      pan: { x: 0, y: 0 },
+      zoom: 0.3,
+      viewportWidth: 3000,
+      viewportHeight: 1200,
+      keepAliveUntil: {},
+      now: 2_000,
+    });
+
+    expect(result.liveTerminalIds.size).toBe(6);
   });
 
   it("keeps recently visible terminals alive briefly after leaving the viewport", () => {

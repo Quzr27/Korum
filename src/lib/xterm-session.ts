@@ -13,7 +13,7 @@
  * - Resize (win.width/height)
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Terminal, type IBufferLine, type ILink } from "@xterm/xterm";
@@ -40,7 +40,7 @@ import {
   normalizeTerminalStatusGlyphs,
 } from "@/lib/terminal-glyph-normalizer";
 import { handleTerminalShortcut } from "@/lib/terminal-shortcuts";
-import { adjustMouseForZoom } from "@/lib/xterm-mouse-compat";
+import { adjustMouseForZoom, invalidateContainerRect } from "@/lib/xterm-mouse-compat";
 import { useVisibility } from "@/lib/visibility-context";
 import type { PasteRequest } from "@/types";
 
@@ -49,6 +49,44 @@ const LIVE_WRITE_REPAIR_IDLE_DELAY_MS = 180;
 const LIVE_WRITE_REPAIR_MAX_DELAY_MS = 1000;
 const ESLINT_CONTEXT_SCAN_LINES = 24;
 const TERMINAL_FONT_LOAD_TIMEOUT_MS = 1500;
+
+// A viewport teleport detaches many xterms in one commit; their deferred
+// dispose() calls would otherwise all land in the same task and block the
+// main thread. Each pending dispose takes the next frame-sized slot; a gap
+// since the last schedule starts a fresh burst.
+const DISPOSE_SLOT_MS = 16;
+const DISPOSE_BURST_RESET_MS = 250;
+let disposeBurstSlot = 0;
+let lastDisposeScheduledAt = 0;
+
+function nextDisposeDelay(): number {
+  const now = performance.now();
+  if (now - lastDisposeScheduledAt > DISPOSE_BURST_RESET_MS) disposeBurstSlot = 0;
+  lastDisposeScheduledAt = now;
+  return disposeBurstSlot++ * DISPOSE_SLOT_MS;
+}
+
+/**
+ * Leave a static clone of the terminal's rendered rows in the container when
+ * a still-mounted terminal is detached (live-budget eviction, attach
+ * staggering). The window keeps showing its last frame instead of going
+ * blank; the next attach clears it via `replaceChildren()`.
+ */
+function appendTerminalGhost(container: HTMLElement, term: Terminal): void {
+  const rows = term.element?.querySelector(".xterm-rows");
+  if (!rows) return;
+  container.querySelector(".terminal-ghost")?.remove();
+  const ghost = document.createElement("div");
+  // The `xterm` class keeps xterm.css row styling and the container's gutter
+  // padding applying to the clone, so the ghost aligns with the live layout.
+  ghost.className = "terminal-ghost xterm";
+  ghost.setAttribute("aria-hidden", "true");
+  ghost.style.fontFamily = String(term.options.fontFamily ?? "");
+  ghost.style.fontSize = `${term.options.fontSize ?? 13}px`;
+  ghost.style.lineHeight = String(term.options.lineHeight ?? 1.22);
+  ghost.appendChild(rows.cloneNode(true));
+  container.appendChild(ghost);
+}
 
 interface LogicalTerminalLine {
   text: string;
@@ -236,6 +274,8 @@ export interface UseXtermSessionOptions {
   workspaceRoot?: string;
   onOpenFileLink: (filePath: string, line: number, column?: number) => void;
   onSpawnError: (error: string) => void;
+  /** Notifies the owner whether a static detach ghost occupies the container. */
+  onGhosted: (hasGhost: boolean) => void;
 }
 
 export interface UseXtermSessionResult {
@@ -267,6 +307,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     workspaceRoot,
     onOpenFileLink,
     onSpawnError,
+    onGhosted,
   } = opts;
 
   const termInstanceRef = useRef<Terminal | null>(null);
@@ -276,6 +317,11 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
   const onOpenFileLinkRef = useRef(onOpenFileLink);
 
   const { register: registerVisibility, unregister: unregisterVisibility } = useVisibility();
+
+  // Read at cleanup time on purpose: distinguishes a detach-while-mounted
+  // (live-budget eviction → leave a ghost) from a component unmount, where
+  // Effect A's cleanup has already flipped mountedRef to false.
+  const isStillMounted = useCallback(() => mountedRef.current, [mountedRef]);
 
   useEffect(() => {
     workspaceRootRef.current = workspaceRoot;
@@ -292,6 +338,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
 
     flushPendingDispose();
     termRef.current.replaceChildren();
+    onGhosted(false);
 
     const xtermTheme = getXtermTheme(terminalTheme);
     const fontFamily = TERMINAL_FONT_FAMILIES[terminalFont];
@@ -523,6 +570,15 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
           });
           onSnapshotCaptured(id, snapshot || null);
         }
+        // Detach without unmount (live-budget eviction / attach staggering):
+        // keep a frozen visual of the terminal instead of a blank window.
+        if (isStillMounted()) {
+          appendTerminalGhost(container, term);
+          onGhosted(true);
+          // Hide the live element now — its dispose is deferred, and the
+          // ghost stacked on top would otherwise double-draw the same text.
+          if (term.element) term.element.style.visibility = "hidden";
+        }
         invoke("detach_terminal", { id: ptyId }).catch(() => {});
       }
       linkProviderDisposable.dispose();
@@ -545,11 +601,11 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
         if (pendingDisposeRef.current?.term === term) {
           pendingDisposeRef.current = null;
         }
-      }, 0);
+      }, nextDisposeDelay());
       pendingDisposeRef.current = { term, timer };
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- settings handled by separate effect; terminalSnapshot captured at mount via snapshotAtMount; link callbacks use refs to avoid remounting xterm; onPasteRequest/onSpawnError omitted — both are stable (useCallback with [] deps / useState setter)
-  }, [flushPendingDispose, id, isPtyReady, onSnapshotCaptured, shouldAttach]);
+  }, [flushPendingDispose, id, isPtyReady, onGhosted, onSnapshotCaptured, shouldAttach]);
 
   // Update terminal options when settings change
   useEffect(() => {
@@ -582,6 +638,8 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
           if (dims && ptyIdRef.current) invoke("resize_terminal", { id: ptyIdRef.current, rows: dims.rows, cols: dims.cols });
         } catch { /* ignore */ }
       }
+      // Font change may alter container metrics — invalidate cached rect.
+      if (mountedRef.current && termRef.current) invalidateContainerRect(termRef.current);
       term.refresh(0, term.rows - 1);
       if (wasAtBottom) {
         term.scrollToBottom();
@@ -617,6 +675,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
   useEffect(() => {
     const term = termInstanceRef.current;
     const fit = fitAddonRef.current;
+    const container = termRef.current;
     if (!fit || !term) return;
     requestAnimationFrame(() => {
       const buf = term.buffer.active;
@@ -627,6 +686,9 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
         if (dims && ptyIdRef.current) invoke("resize_terminal", { id: ptyIdRef.current, rows: dims.rows, cols: dims.cols });
       } catch { /* ignore */ }
       if (wasAtBottom) term.scrollToBottom();
+      // Container geometry changed — invalidate cached rect so the next
+      // mousemove re-measures the real position.
+      if (container) invalidateContainerRect(container);
     });
   }, [windowWidth, windowHeight]); // eslint-disable-line react-hooks/exhaustive-deps
 

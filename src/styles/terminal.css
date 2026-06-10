@@ -1,8 +1,38 @@
 /* ── xterm ── */
 .terminal-container {
   box-sizing: border-box;
+  position: relative;
   width: 100%;
   height: 100%;
+}
+
+/* Frozen last-frame clone left behind when a live-budget-evicted terminal
+   detaches (see appendTerminalGhost in xterm-session.ts); the next attach
+   clears it via replaceChildren(). Dimmed to read as "not live". */
+.terminal-container .terminal-ghost {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.6;
+}
+
+/* Plain-text tail of the Rust replay buffer shown for terminals that are
+   mounted but not attached (overview zoom, attach staggering) and have no
+   DOM ghost yet. Padding mirrors the .xterm gutter so text lines up with
+   the live terminal that may replace it. */
+.window-content .terminal-preview {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 2px 12px 4px;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  white-space: pre;
+  line-height: 1.22;
+  opacity: 0.6;
 }
 
 .terminal-container .xterm {

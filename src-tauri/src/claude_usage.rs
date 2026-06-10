@@ -9,12 +9,20 @@ const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const REFRESH_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
-pub(crate) static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("failed to build HTTP client")
-});
+/// Build the shared HTTP client once. Stored as `Result` so a TLS init
+/// failure (e.g. no root certificates) surfaces as a command error rather
+/// than aborting the whole app.
+pub(crate) static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> =
+    LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|e| format!("failed to build HTTP client: {e}"))
+    });
+
+pub(crate) fn http_client() -> Result<&'static reqwest::Client, String> {
+    HTTP_CLIENT.as_ref().map_err(|e| e.clone())
+}
 
 // ── Public response types (serialized to frontend) ──
 
@@ -187,7 +195,8 @@ fn is_expired(oauth: &OAuthCredentials) -> bool {
 // ── HTTP ──
 
 async fn request_usage(token: &str) -> Result<ApiUsageResponse, UsageError> {
-    let resp = HTTP_CLIENT
+    let client = http_client().map_err(UsageError::Other)?;
+    let resp = client
         .get(USAGE_URL)
         .bearer_auth(token)
         .header("anthropic-beta", "oauth-2025-04-20")
@@ -215,7 +224,8 @@ async fn refresh_token_flow(
     source: &CredentialSource,
     original_raw: &str,
 ) -> Result<String, String> {
-    let resp = HTTP_CLIENT
+    let client = http_client()?;
+    let resp = client
         .post(REFRESH_URL)
         .json(&serde_json::json!({
             "grant_type": "refresh_token",

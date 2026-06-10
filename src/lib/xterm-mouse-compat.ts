@@ -9,6 +9,15 @@
  *
  * Fix: adjust `clientX`/`clientY` in capture phase so xterm sees offsets
  * that match its unscaled cell metrics.
+ *
+ * Rect caching: getBoundingClientRect() is O(layout) and is called in a
+ * capture-phase mousemove, which fires for every pixel of cursor movement for
+ * every attached terminal. We cache the rect with a 100ms TTL. The cache is
+ * invalidated explicitly via invalidateContainerRect() whenever the container's
+ * position can change (terminal window drag commit, canvas pan/zoom commit,
+ * container resize/fit). During another window's drag the cached rect of *this*
+ * terminal's container is still valid because dragging a different window does
+ * not move this container.
  */
 
 /** One-time check: can we override MouseEvent.clientX via defineProperty? */
@@ -23,6 +32,32 @@ export let CAN_OVERRIDE_CLIENT_COORDS: boolean = (() => {
 })();
 
 let warnedOnce = false;
+
+const RECT_TTL_MS = 100;
+
+interface CachedRect {
+  rect: DOMRect;
+  at: number;
+}
+
+const rectCache = new WeakMap<HTMLElement, CachedRect>();
+
+/**
+ * Explicitly invalidate the cached rect for a container (call after drag/zoom
+ * commit or resize/fit so the next mousemove re-measures the real position).
+ */
+export function invalidateContainerRect(container: HTMLElement): void {
+  rectCache.delete(container);
+}
+
+function getCachedRect(container: HTMLElement): DOMRect {
+  const now = performance.now();
+  const cached = rectCache.get(container);
+  if (cached && now - cached.at < RECT_TTL_MS) return cached.rect;
+  const rect = container.getBoundingClientRect();
+  rectCache.set(container, { rect, at: now });
+  return rect;
+}
 
 /**
  * Adjust a MouseEvent's clientX/Y to compensate for CSS `transform: scale(zoom)`
@@ -47,7 +82,7 @@ export function adjustMouseForZoom(
     return;
   }
 
-  const rect = container.getBoundingClientRect();
+  const rect = getCachedRect(container);
   try {
     Object.defineProperty(e, "clientX", {
       value: rect.left + (e.clientX - rect.left) / zoom,

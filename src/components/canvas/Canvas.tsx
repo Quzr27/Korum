@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/context-menu";
 import { useSettings } from "@/lib/settings-context";
 import { selectLiveTerminalIds } from "@/lib/live-terminals";
+import { advanceAttachSet, liveIdsSignature } from "@/lib/staggered-attach";
 import { isWindowInViewport } from "@/lib/viewport";
 import {
   buildTetherRenderIndex,
@@ -29,6 +30,10 @@ import { WORKSPACE_COLORS } from "@/types";
 const MINIMAP_W = 160;
 const MINIMAP_H = 100;
 const MINIMAP_PAD = 10;
+// One xterm attach per frame — a viewport teleport (sidebar click) can swap
+// nearly the whole live set at once; attaching them all in one commit blocks
+// the main thread for seconds. The active terminal always attaches first.
+const ATTACH_BATCH_PER_FRAME = 1;
 
 interface CanvasProps {
   windows: WindowState[];
@@ -132,9 +137,10 @@ export default memo(function Canvas({
       return isWindowInViewport(w, pan, zoom, vpW, vpH, buffer);
     });
   }, [visibleWindows, pan, zoom, activeWindowId]);
-  const snapTargetSignature = visibleWindows
-    .map(({ id, x, y, width, height }) => `${id}:${x}:${y}:${width}:${height}`)
-    .join("|");
+  const snapTargetSignature = useMemo(
+    () => visibleWindows.map(({ id, x, y, width, height }) => `${id}:${x}:${y}:${width}:${height}`).join("|"),
+    [visibleWindows],
+  );
   if (snapTargetSignatureRef.current !== snapTargetSignature) {
     snapTargetSignatureRef.current = snapTargetSignature;
     snapTargetsRef.current = visibleWindows.map(({ id, x, y, width, height }) => ({ id, x, y, width, height }));
@@ -273,6 +279,40 @@ export default memo(function Canvas({
     (earliest, expiry) => (expiry > selectionNow && expiry < earliest ? expiry : earliest),
     Number.POSITIVE_INFINITY,
   );
+
+  // Staggered attach: `attachedTerminalIds` trails the live selection so a
+  // viewport teleport never attaches a dozen xterms in one commit. Detaches
+  // apply on the first step; attaches land ATTACH_BATCH_PER_FRAME per frame,
+  // active terminal first (see src/lib/staggered-attach.ts).
+  const [attachedTerminalIds, setAttachedTerminalIds] = useState<ReadonlySet<string>>(() => new Set());
+  const attachedTerminalIdsRef = useRef(attachedTerminalIds);
+  const liveTargetRef = useRef(liveSelection.liveTerminalIds);
+  liveTargetRef.current = liveSelection.liveTerminalIds;
+  const activeWindowIdRef = useRef(activeWindowId);
+  activeWindowIdRef.current = activeWindowId;
+  const liveTerminalSignature = liveIdsSignature(liveSelection.liveTerminalIds);
+
+  useEffect(() => {
+    let raf: number | null = null;
+    const step = () => {
+      raf = null;
+      const { next, done } = advanceAttachSet(
+        attachedTerminalIdsRef.current,
+        liveTargetRef.current,
+        activeWindowIdRef.current,
+        ATTACH_BATCH_PER_FRAME,
+      );
+      if (next !== attachedTerminalIdsRef.current) {
+        attachedTerminalIdsRef.current = next;
+        setAttachedTerminalIds(next);
+      }
+      if (!done) raf = requestAnimationFrame(step);
+    };
+    step();
+    return () => {
+      if (raf !== null) cancelAnimationFrame(raf);
+    };
+  }, [liveTerminalSignature, activeWindowId]);
 
   useEffect(() => {
     setSelectionNow(Date.now());
@@ -441,6 +481,21 @@ export default memo(function Canvas({
     [onDoubleClick],
   );
 
+  // Stable navigate callback for Minimap — reads zoom from ref so the callback
+  // identity doesn't change when zoom updates, avoiding Minimap memo busts.
+  const handleMinimapNavigate = useCallback(
+    (worldX: number, worldY: number) => {
+      const rect = viewportRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const currentZoom = zoomRef.current;
+      onPanChange({
+        x: rect.width / 2 - worldX * currentZoom,
+        y: rect.height / 2 - worldY * currentZoom,
+      });
+    },
+    [onPanChange],
+  );
+
   const hasWorkspace = !!activeWorkspaceId;
 
   return (
@@ -502,7 +557,7 @@ export default memo(function Canvas({
             const ws = wsMap.get(w.workspaceId);
             const wsColor = ws ? WORKSPACE_COLORS[ws.color] : undefined;
             const shouldHydrate = hydratedTerminalIds.has(w.id) || bootingTerminalIds.has(w.id);
-            const shouldAttach = liveSelection.liveTerminalIds.has(w.id);
+            const shouldAttach = attachedTerminalIds.has(w.id);
             if (w.type === "terminal") {
               return (
                 <TerminalWindow
@@ -604,14 +659,7 @@ export default memo(function Canvas({
         pan={pan}
         zoom={zoom}
         viewportRef={viewportRef}
-        onNavigate={(worldX, worldY) => {
-          const rect = viewportRef.current?.getBoundingClientRect();
-          if (!rect) return;
-          onPanChange({
-            x: rect.width / 2 - worldX * zoom,
-            y: rect.height / 2 - worldY * zoom,
-          });
-        }}
+        onNavigate={handleMinimapNavigate}
       />
     </>
   );

@@ -109,6 +109,9 @@ struct AgentStatusInner {
     registrations: Mutex<HashMap<String, AgentTerminalRegistration>>,
     statuses: Mutex<HashMap<String, AgentStatus>>,
     poller_running: AtomicBool,
+    /// Set to `true` during app teardown. The poller thread checks this flag
+    /// every cycle and exits its loop when it is set.
+    shutdown: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -144,6 +147,34 @@ struct StatusProbe {
     process_cwd: Option<String>,
 }
 
+/// Per-pid cache entry for `process_command_for_pid`. A running process's
+/// command line never changes, so we cache it for the pid's lifetime and only
+/// invalidate when the pid disappears (probe returns a different pid).
+#[derive(Default)]
+struct ProcessCommandCache {
+    /// Maps pid → cached command string.
+    commands: HashMap<i32, String>,
+}
+
+impl ProcessCommandCache {
+    /// Return the cached command for `pid`, calling `process_command_for_pid`
+    /// on a cache miss and storing the result. Stale entries (pids no longer
+    /// present in the current poll) should be evicted via `retain_pids`.
+    fn get(&mut self, pid: i32) -> Option<&str> {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.commands.entry(pid) {
+            if let Some(cmd) = process_command_for_pid(pid) {
+                e.insert(cmd);
+            }
+        }
+        self.commands.get(&pid).map(|s| s.as_str())
+    }
+
+    /// Remove cache entries whose pids are not in `active_pids`.
+    fn retain_pids(&mut self, active_pids: &HashSet<i32>) {
+        self.commands.retain(|pid, _| active_pids.contains(pid));
+    }
+}
+
 impl AgentStatusState {
     pub fn new() -> Self {
         Self {
@@ -151,8 +182,15 @@ impl AgentStatusState {
                 registrations: Mutex::new(HashMap::new()),
                 statuses: Mutex::new(HashMap::new()),
                 poller_running: AtomicBool::new(false),
+                shutdown: AtomicBool::new(false),
             }),
         }
+    }
+
+    /// Signal the poller thread to exit. Call this during app shutdown
+    /// (from the `ExitRequested` handler in lib.rs) before the process exits.
+    pub fn shutdown(&self) {
+        self.inner.shutdown.store(true, Ordering::SeqCst);
     }
 
     pub fn register(
@@ -217,7 +255,15 @@ impl AgentStatusState {
         thread::spawn(move || {
             let mut claude_cache = ClaudeAgentsCache::default();
             let mut working_memory: HashMap<String, u64> = HashMap::new();
+            let mut cmd_cache = ProcessCommandCache::default();
+            // Track consecutive app.emit() failures so we stop trying after
+            // the app window has been torn down.
+            let mut consecutive_emit_failures: u32 = 0;
             loop {
+                // Exit cleanly when the app is shutting down.
+                if state.inner.shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
                 let registrations = state.registrations();
                 if !registrations.is_empty() {
                     let now = now_ms();
@@ -226,11 +272,22 @@ impl AgentStatusState {
                         &pty_state,
                         &mut claude_cache,
                         &mut working_memory,
+                        &mut cmd_cache,
                         now,
                     );
                     let changed = state.replace_changed_statuses(statuses);
                     if !changed.is_empty() {
-                        let _ = app.emit(AGENT_STATUS_CHANGED_EVENT, &changed);
+                        if app.emit(AGENT_STATUS_CHANGED_EVENT, &changed).is_err() {
+                            consecutive_emit_failures += 1;
+                            // 5 consecutive failures almost certainly means the
+                            // webview has gone away — stop emitting to avoid
+                            // busy-looping against a dead target.
+                            if consecutive_emit_failures >= 5 {
+                                break;
+                            }
+                        } else {
+                            consecutive_emit_failures = 0;
+                        }
                     }
                 }
                 thread::sleep(POLL_INTERVAL);
@@ -287,13 +344,22 @@ fn build_agent_statuses(
     pty_state: &PtyState,
     claude_cache: &mut ClaudeAgentsCache,
     working_memory: &mut HashMap<String, u64>,
+    cmd_cache: &mut ProcessCommandCache,
     now: u64,
 ) -> Vec<AgentStatus> {
+    // Collect current foreground pids so we can evict stale cache entries.
+    let mut active_pids: HashSet<i32> = HashSet::new();
+
     let probes = registrations
         .iter()
         .map(|registration| {
             let probe = pty_state.agent_probe(&registration.pty_id).ok();
-            let kind = detect_agent_kind(probe.as_ref());
+            // Track active pids for cache eviction below.
+            if let Some(pid) = probe.as_ref().and_then(|p| p.foreground_process_group) {
+                active_pids.insert(pid);
+            }
+            // Use cached command lookup so we don't fork /bin/ps every 2 s per terminal.
+            let kind = detect_agent_kind_cached(probe.as_ref(), cmd_cache);
             let process_cwd = probe
                 .as_ref()
                 .and_then(|probe| probe.foreground_process_group)
@@ -306,6 +372,9 @@ fn build_agent_statuses(
             }
         })
         .collect::<Vec<_>>();
+
+    // Evict cached commands for pids that are no longer the foreground process.
+    cmd_cache.retain_pids(&active_pids);
 
     let has_claude = probes.iter().any(|probe| probe.kind == AgentKind::Claude);
     let claude_cwds = probes
@@ -517,11 +586,14 @@ impl ClaudeAgentsCache {
 
         match fetch_claude_agents() {
             Ok(records) => {
+                // Successful fetch: update records (may be empty if no agents
+                // are running — that's a real "nothing active" signal).
                 self.records = records;
                 self.next_fetch_at_ms = now.saturating_add(CLAUDE_POLL_INTERVAL_MS);
             }
             Err(_) => {
-                self.records = Vec::new();
+                // On error, RETAIN previous records to avoid status flicker.
+                // Only advance the backoff timer; clear on next successful fetch.
                 self.next_fetch_at_ms = now.saturating_add(CLAUDE_ERROR_BACKOFF_MS);
             }
         }
@@ -782,14 +854,19 @@ fn normalize_path_text(path: &str) -> Option<String> {
     }
 }
 
-fn detect_agent_kind(probe: Option<&PtyAgentProbe>) -> AgentKind {
+/// Uses `cmd_cache` so we only spawn `/bin/ps`
+/// on the first observation of a given pid, not every poll tick.
+fn detect_agent_kind_cached(
+    probe: Option<&PtyAgentProbe>,
+    cmd_cache: &mut ProcessCommandCache,
+) -> AgentKind {
     let Some(probe) = probe else {
         return AgentKind::Unknown;
     };
 
     if let Some(pid) = probe.foreground_process_group {
-        if let Some(command) = process_command_for_pid(pid) {
-            let kind = kind_from_process_command(&command);
+        if let Some(command) = cmd_cache.get(pid) {
+            let kind = kind_from_process_command(command);
             if kind != AgentKind::Unknown {
                 return kind;
             }
@@ -982,7 +1059,7 @@ fn has_idle_prompt(text: &str) -> bool {
         })
 }
 
-fn strip_ansi(input: &str) -> String {
+pub(crate) fn strip_ansi(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -991,13 +1068,57 @@ fn strip_ansi(input: &str) -> String {
             continue;
         }
 
-        while let Some(next) = chars.next() {
-            if next.is_ascii_alphabetic() {
-                break;
+        // We have ESC — peek at the introducer byte.
+        match chars.peek() {
+            Some(&'[') => {
+                // CSI: ESC [ — consume through the final byte (0x40–0x7E).
+                chars.next(); // consume '['
+                for next in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&next) {
+                        break; // final byte consumed
+                    }
+                }
             }
+            Some(&']') => {
+                // OSC: ESC ] — consume until BEL (\x07) or ST (ESC \).
+                chars.next(); // consume ']'
+                consume_until_st_or_bel(&mut chars);
+            }
+            Some(&'P') | Some(&'X') | Some(&'^') | Some(&'_') => {
+                // String-type sequences: DCS (ESC P), SOS (ESC X),
+                // PM (ESC ^), APC (ESC _).
+                // Payload ends at ST (ESC \); also accept BEL as a
+                // lenient terminator (mirrors OSC handling above).
+                chars.next(); // consume introducer
+                consume_until_st_or_bel(&mut chars);
+            }
+            Some(_) => {
+                // Other ESC + single char (e.g. ESC M, ESC =, etc.) — consume
+                // that one character and move on.
+                chars.next();
+            }
+            None => {} // bare ESC at end of string
         }
     }
     output
+}
+
+/// Consume characters until ST (ESC `\`) or BEL (`\x07`) is reached,
+/// or until the input is exhausted (unterminated sequence).
+fn consume_until_st_or_bel(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    loop {
+        match chars.next() {
+            None | Some('\x07') => break,
+            Some('\u{1b}') => {
+                // ST = ESC '\'
+                if chars.peek() == Some(&'\\') {
+                    chars.next(); // consume '\'
+                }
+                break;
+            }
+            _ => {} // consume payload byte
+        }
+    }
 }
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
@@ -1337,5 +1458,91 @@ mod tests {
 
         fs::remove_dir_all(&root).unwrap();
         assert_eq!(activity, Some(AgentActivity::Working));
+    }
+
+    // ── strip_ansi tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn strip_ansi_removes_csi_sequences() {
+        // Standard color/attribute codes.
+        assert_eq!(strip_ansi("\x1b[31mred\x1b[0m"), "red");
+        assert_eq!(strip_ansi("\x1b[1;32mbold green\x1b[m"), "bold green");
+    }
+
+    #[test]
+    fn strip_ansi_removes_osc_title_bel_terminated() {
+        // OSC 0 title: "\x1b]0;/home/user/project\x07" — the original bug
+        // left "ome/user/project\x07" in the output.
+        let input = "\x1b]0;/home/user/project\x07visible text";
+        assert_eq!(strip_ansi(input), "visible text");
+    }
+
+    #[test]
+    fn strip_ansi_removes_osc_7_st_terminated() {
+        // OSC 7 cwd notification terminated by ST (ESC \).
+        let input = "\x1b]7;file:///Users/dev/project\x1b\\after";
+        assert_eq!(strip_ansi(input), "after");
+    }
+
+    #[test]
+    fn strip_ansi_removes_osc_then_csi_then_text() {
+        // Mixed sequence: title, CSI reset, then plain text.
+        let input = "\x1b]0;my-title\x07\x1b[0mclean";
+        assert_eq!(strip_ansi(input), "clean");
+    }
+
+    #[test]
+    fn strip_ansi_bare_esc_consumes_one_char() {
+        // ESC M (reverse index), ESC = (application keypad), etc.
+        assert_eq!(strip_ansi("\x1b=text"), "text");
+        assert_eq!(strip_ansi("\x1bMtext"), "text");
+    }
+
+    #[test]
+    fn strip_ansi_plain_text_unchanged() {
+        assert_eq!(strip_ansi("hello world"), "hello world");
+    }
+
+    #[test]
+    fn strip_ansi_preserves_text_around_sequences() {
+        let input = "before\x1b[32mgreen text\x1b[0mafter";
+        assert_eq!(strip_ansi(input), "beforegreen textafter");
+    }
+
+    #[test]
+    fn strip_ansi_osc_at_end_of_string_no_panic() {
+        // Unterminated OSC — should consume to end without panicking.
+        let input = "text\x1b]0;unterminated";
+        assert_eq!(strip_ansi(input), "text");
+    }
+
+    #[test]
+    fn strip_ansi_removes_dcs_payload() {
+        // DCS (ESC P) terminated by ST (ESC \) — payload must be dropped.
+        let input = "before\x1bPsome dcs data\x1b\\after";
+        assert_eq!(strip_ansi(input), "beforeafter");
+        // Also verify BEL terminates DCS.
+        let input2 = "before\x1bPsome dcs data\x07after";
+        assert_eq!(strip_ansi(input2), "beforeafter");
+    }
+
+    #[test]
+    fn strip_ansi_removes_apc_payload() {
+        // APC (ESC _) — tmux passthrough style: ESC _ payload ESC \
+        let input = "start\x1b_tmux passthrough payload\x1b\\end";
+        assert_eq!(strip_ansi(input), "startend");
+        // PM (ESC ^) — same ST termination.
+        let input2 = "start\x1b^pm payload\x1b\\end";
+        assert_eq!(strip_ansi(input2), "startend");
+        // SOS (ESC X) — same ST termination.
+        let input3 = "start\x1bXsos payload\x1b\\end";
+        assert_eq!(strip_ansi(input3), "startend");
+    }
+
+    #[test]
+    fn strip_ansi_unterminated_dcs_at_end_of_string() {
+        // DCS with no closing ST — payload consumed to end, no panic, no output.
+        let input = "before\x1bPunterminated dcs payload";
+        assert_eq!(strip_ansi(input), "before");
     }
 }

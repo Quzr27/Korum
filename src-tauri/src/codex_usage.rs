@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::claude_usage::HTTP_CLIENT;
+use crate::claude_usage::http_client;
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const REFRESH_URL: &str = "https://auth.openai.com/oauth/token";
@@ -123,7 +123,8 @@ async fn request_usage(
     token: &str,
     account_id: &Option<String>,
 ) -> Result<ApiUsageResponse, UsageError> {
-    let mut req = HTTP_CLIENT.get(USAGE_URL).bearer_auth(token);
+    let client = http_client().map_err(UsageError::Other)?;
+    let mut req = client.get(USAGE_URL).bearer_auth(token);
 
     if let Some(id) = account_id {
         req = req.header("ChatGPT-Account-ID", id);
@@ -153,10 +154,11 @@ async fn request_usage(
 
 async fn refresh_token_flow(
     tokens: &AuthTokens,
-    auth_path: &PathBuf,
+    auth_path: &std::path::Path,
     original_raw: &str,
 ) -> Result<String, String> {
-    let resp = HTTP_CLIENT
+    let client = http_client()?;
+    let resp = client
         .post(REFRESH_URL)
         .json(&serde_json::json!({
             "client_id": REFRESH_CLIENT_ID,
@@ -177,7 +179,7 @@ async fn refresh_token_flow(
         .map_err(|e| format!("Invalid Codex refresh response: {e}"))?;
 
     // Atomic write back to auth.json (via spawn_blocking for file I/O)
-    let path = auth_path.clone();
+    let path = auth_path.to_path_buf();
     let raw = original_raw.to_string();
     let new_access = refresh.access_token.clone();
     let new_refresh = refresh.refresh_token.clone();
