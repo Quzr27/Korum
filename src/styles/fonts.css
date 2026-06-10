@@ -11,3 +11,17 @@
 @import "@fontsource/source-code-pro/latin-400-italic.css";
 @import "@fontsource/source-code-pro/latin-700.css";
 @import "@fontsource/source-code-pro/latin-700-italic.css";
+
+/* Tiny bundled fallback for the two Nerd glyphs that `terminal-glyph-normalizer`
+   emits from Claude/Codex statusline emoji (folder U+E5FF, git-branch U+E0A0).
+   No installed font carries U+E5FF, so without this the folder icon is a tofu box.
+   Subset to exactly those codepoints (~2.5KB) at single-cell (0.6em) advance — if
+   the normalizer gains new emoji→glyph mappings, extend the subset (see the
+   terminal-system rule). Used only as a per-glyph fallback, never the text font. */
+@font-face {
+  font-family: "Korum Status Icons";
+  src: url("./fonts/terminal-status-icons.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}

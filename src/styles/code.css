@@ -1,4 +1,16 @@
 /* ── Code table cells ── */
+/* Override the canvas grab cursor (inherited from .canvas-viewport) and
+   explicitly opt the code body into text selection. */
+.code-viewer {
+  cursor: text;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.code-viewer ::selection {
+  background: color-mix(in oklch, var(--ws-accent, #4493f8) 38%, transparent);
+}
+
 .code-line {
   height: 1.5em;
 }
@@ -11,6 +23,7 @@
   text-align: right;
   color: inherit;
   opacity: 0.3;
+  cursor: default;
   user-select: none;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;

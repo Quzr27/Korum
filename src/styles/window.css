@@ -29,22 +29,12 @@
     var(--window-shadow-active);
 }
 
-.window[data-agent-activity] {
-  box-shadow:
-    0 0 0 1px var(--term-border, var(--border)),
-    0 0 0 2px color-mix(in oklch, var(--agent-window-status) 70%, transparent),
-    0 0 24px var(--agent-window-status-halo),
-    var(--window-shadow);
-}
-
-.window[data-agent-activity][data-active="true"] {
-  box-shadow:
-    0 0 0 1px var(--term-border, var(--border)),
-    0 0 0 2px var(--agent-window-status-strong),
-    0 0 30px var(--agent-window-status-halo),
-    var(--window-shadow-active);
-}
-
+/* Agent status no longer floods the whole window with a ring + glow halo (it
+   read as too distracting in normal canvas work). It now shows as a calm 2px
+   accent line under the titlebar — see .window-titlebar::after. The working /
+   waiting blocks below only set the status colour vars that the line reads;
+   idle / unknown / non-agent windows keep those vars transparent so no line
+   shows. War-room mode keeps its own ambient pulse further down. */
 .window[data-agent-activity="working"] {
   --agent-window-status: var(--agent-status-working);
   --agent-window-status-strong: var(--agent-status-working-strong);
@@ -57,9 +47,9 @@
   --agent-window-status-halo: var(--agent-status-waiting-halo);
 }
 
-/* Idle / unknown are neutral states — no agent halo, just the normal window
-   border (and the active-window shadow). Only working/waiting draw a coloured
-   ring so the canvas stays calm when nothing is actively happening. */
+/* Idle / unknown are neutral: status vars stay transparent, so the titlebar
+   status line is invisible and the canvas stays calm when nothing is happening.
+   Only working/waiting set a colour. */
 .window[data-agent-activity="idle"],
 .window[data-agent-activity="unknown"] {
   --agent-window-status: transparent;
@@ -159,7 +149,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .war-room .window.agent-war-room-pulse--working,
-  .war-room .window.agent-war-room-pulse--waiting {
+  .war-room .window.agent-war-room-pulse--waiting,
+  .window[data-agent-activity="waiting"] .window-titlebar::after {
     animation: none;
   }
 }
@@ -174,6 +165,51 @@
   border-bottom: 1px solid var(--term-border, var(--border));
   cursor: move;
   user-select: none;
+}
+
+/* Agent status line: a 2px accent sitting over the titlebar's bottom border.
+   Coloured by --agent-window-status (transparent unless working/waiting), so the
+   line is invisible for idle/unknown and non-agent windows. Replaces the old
+   full-window halo with a single calm, glanceable marker. */
+.window-titlebar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--agent-window-status);
+  pointer-events: none;
+}
+
+.window[data-active="true"] .window-titlebar::after {
+  background: var(--agent-window-status-strong);
+}
+
+/* Waiting is the attention state: the line flashes once with a soft localized
+   glow, then settles to a steady bar (one-shot so it never keeps pulsing). */
+.window[data-agent-activity="waiting"] .window-titlebar::after {
+  animation: agent-status-line-ping 1.8s ease-out 1;
+}
+
+.canvas-viewport.panning .window-titlebar::after,
+.canvas-viewport.zooming .window-titlebar::after {
+  animation-play-state: paused;
+}
+
+@keyframes agent-status-line-ping {
+  0% {
+    opacity: 0.4;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  20% {
+    opacity: 1;
+    box-shadow: 0 1px 10px 0 var(--agent-window-status-strong);
+  }
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 /* Active window: title text in workspace color */

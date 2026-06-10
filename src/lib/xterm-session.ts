@@ -19,7 +19,13 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Terminal, type IBufferLine, type ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { TERMINAL_FONT_FAMILIES, TERMINAL_FONT_LOAD_TARGETS, getXtermTheme } from "@/lib/settings";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import {
+  TERMINAL_FONT_FAMILIES,
+  TERMINAL_FONT_LOAD_TARGETS,
+  TERMINAL_NERD_FONT_SAMPLE,
+  getXtermTheme,
+} from "@/lib/settings";
 import type { TerminalFont, TerminalTheme } from "@/lib/settings/types";
 import {
   findTerminalDiagnosticLink,
@@ -29,6 +35,10 @@ import {
   resolveTerminalFilePath,
   type TerminalLinkSegment,
 } from "@/lib/terminal-smart-links";
+import {
+  createTerminalOutputNormalizer,
+  normalizeTerminalStatusGlyphs,
+} from "@/lib/terminal-glyph-normalizer";
 import { handleTerminalShortcut } from "@/lib/terminal-shortcuts";
 import { adjustMouseForZoom } from "@/lib/xterm-mouse-compat";
 import { useVisibility } from "@/lib/visibility-context";
@@ -38,6 +48,7 @@ const SNAPSHOT_SCROLLBACK_ROWS = 120;
 const LIVE_WRITE_REPAIR_IDLE_DELAY_MS = 180;
 const LIVE_WRITE_REPAIR_MAX_DELAY_MS = 1000;
 const ESLINT_CONTEXT_SCAN_LINES = 24;
+const TERMINAL_FONT_LOAD_TIMEOUT_MS = 1500;
 
 interface LogicalTerminalLine {
   text: string;
@@ -48,6 +59,38 @@ function writeTerminalSnapshot(term: Terminal, snapshot: string): Promise<void> 
   return new Promise((resolve) => {
     term.write(snapshot, () => resolve());
   });
+}
+
+function waitForTerminalFont(fontLoadTarget: string | undefined, fontSize: number): Promise<void> {
+  if (!fontLoadTarget || !("fonts" in document)) return Promise.resolve();
+
+  const fontSpec = `${fontSize}px ${fontLoadTarget}`;
+  const fontLoad = document.fonts
+    .load(fontSpec, TERMINAL_NERD_FONT_SAMPLE)
+    .then(() => undefined, () => undefined);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const timeout = window.setTimeout(finish, TERMINAL_FONT_LOAD_TIMEOUT_MS);
+
+    function finish() {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve();
+    }
+
+    void fontLoad.then(finish);
+  });
+}
+
+function forceTerminalFontRemeasure(term: Terminal, fontFamily: string) {
+  // xterm ignores assigning the same fontFamily string, even after WebKit swaps
+  // in a newly-loaded @font-face. Nudge the option so the char-size service
+  // measures the real patched font before FitAddon computes cols/rows.
+  term.options.fontFamily = `${fontFamily}, monospace`;
+  term.options.fontFamily = fontFamily;
+  term.clearTextureAtlas();
 }
 
 function refreshTerminalDisplay(
@@ -251,9 +294,11 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     termRef.current.replaceChildren();
 
     const xtermTheme = getXtermTheme(terminalTheme);
+    const fontFamily = TERMINAL_FONT_FAMILIES[terminalFont];
+    const fontLoadTarget = TERMINAL_FONT_LOAD_TARGETS[terminalFont];
     const term = new Terminal({
       fontSize: terminalFontSize,
-      fontFamily: TERMINAL_FONT_FAMILIES[terminalFont],
+      fontFamily,
       lineHeight: 1.22,
       theme: {
         ...xtermTheme,
@@ -266,6 +311,9 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
 
     const fitAddon = new FitAddon();
     const serializeAddon = new SerializeAddon();
+    const unicode11Addon = new Unicode11Addon();
+    term.loadAddon(unicode11Addon);
+    term.unicode.activeVersion = "11";
     term.loadAddon(fitAddon);
     term.loadAddon(serializeAddon);
     termInstanceRef.current = term;
@@ -273,9 +321,6 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
 
     // Open terminal synchronously (container is in DOM from React commit)
     term.open(termRef.current!);
-
-    // Fit synchronously BEFORE anything else — ensures correct dimensions
-    try { fitAddon.fit(); } catch { /* container not ready */ }
 
     const linkProviderDisposable = term.registerLinkProvider({
       provideLinks: (bufferLineNumber, callback) => {
@@ -376,11 +421,14 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     };
     // Capture snapshot at mount time — never read reactively
     const snapshotAtMount = terminalSnapshot;
+    const fontReady = waitForTerminalFont(fontLoadTarget, terminalFontSize);
+    const outputNormalizer = createTerminalOutputNormalizer();
     const channel = new Channel<number[]>();
     channel.onmessage = (data: number[]) => {
       if (!alive) return;
       hasLiveData = true;
-      term.write(new Uint8Array(data), scheduleLiveWriteRepair);
+      const text = outputNormalizer.normalize(new Uint8Array(data));
+      if (text) term.write(text, scheduleLiveWriteRepair);
     };
     const onDataDisposable = term.onData((data: string) => {
       if (ptyIdRef.current) {
@@ -391,9 +439,16 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     });
 
     void (async () => {
+      await fontReady;
+      if (!alive) return;
+
+      forceTerminalFontRemeasure(term, fontFamily);
+      try { fitAddon.fit(); } catch { /* container not ready */ }
+      term.refresh(0, term.rows - 1);
+
       // Restore visual state from previous detach (if any)
       if (snapshotAtMount) {
-        await writeTerminalSnapshot(term, snapshotAtMount);
+        await writeTerminalSnapshot(term, normalizeTerminalStatusGlyphs(snapshotAtMount));
       }
 
       if (!alive) return;
@@ -518,7 +573,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
       const buf = term.buffer.active;
       const wasAtBottom = buf.viewportY >= buf.baseY;
       const savedViewportY = buf.viewportY;
-      term.clearTextureAtlas();
+      forceTerminalFontRemeasure(term, fontFamily);
       const fit = fitAddonRef.current;
       if (fit) {
         try {
@@ -527,6 +582,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
           if (dims && ptyIdRef.current) invoke("resize_terminal", { id: ptyIdRef.current, rows: dims.rows, cols: dims.cols });
         } catch { /* ignore */ }
       }
+      term.refresh(0, term.rows - 1);
       if (wasAtBottom) {
         term.scrollToBottom();
       } else if (buf.viewportY !== savedViewportY) {
@@ -539,13 +595,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     }, 120);
 
     if (fontLoadTarget && "fonts" in document) {
-      void Promise.all([
-        document.fonts.load(`${terminalFontSize}px ${fontLoadTarget}`, "MW@#"),
-        document.fonts.ready,
-      ]).then(() => {
-        window.clearTimeout(timer);
-        requestAnimationFrame(fitTerminal);
-      }).catch(() => {
+      void waitForTerminalFont(fontLoadTarget, terminalFontSize).then(() => {
         window.clearTimeout(timer);
         requestAnimationFrame(fitTerminal);
       });

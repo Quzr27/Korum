@@ -5,10 +5,16 @@ import { DEFAULT_SETTINGS } from "./types";
 
 export const TERMINAL_FONTS: readonly TerminalFont[] = ["JetBrains Mono", "IBM Plex Mono", "Source Code Pro"];
 
+export const TERMINAL_NERD_FONT_SAMPLE = "MW@#\ue5ff\ueafc\uf07b\ue0a0";
+
+// Chosen monospace text font first, then 'Korum Status Icons' as a per-glyph
+// fallback for the two Nerd glyphs that terminal-glyph-normalizer emits from
+// Claude/Codex statusline emoji (folder U+E5FF, git-branch U+E0A0) — no installed
+// font carries U+E5FF. Everything else resolves to the text font / system mono.
 export const TERMINAL_FONT_FAMILIES: Record<TerminalFont, string> = {
-  "JetBrains Mono": "'JetBrains Mono', 'IBM Plex Mono', Menlo, Monaco, 'Courier New', monospace",
-  "IBM Plex Mono": "'IBM Plex Mono', 'JetBrains Mono', Menlo, Monaco, 'Courier New', monospace",
-  "Source Code Pro": "'Source Code Pro', 'JetBrains Mono', Menlo, Monaco, 'Courier New', monospace",
+  "JetBrains Mono": "'JetBrains Mono', 'Korum Status Icons', 'IBM Plex Mono', Menlo, Monaco, 'Courier New', monospace",
+  "IBM Plex Mono": "'IBM Plex Mono', 'Korum Status Icons', 'JetBrains Mono', Menlo, Monaco, 'Courier New', monospace",
+  "Source Code Pro": "'Source Code Pro', 'Korum Status Icons', 'JetBrains Mono', Menlo, Monaco, 'Courier New', monospace",
 };
 
 export const TERMINAL_FONT_LOAD_TARGETS: Record<TerminalFont, string> = {

@@ -90,21 +90,33 @@ export default memo(function CodeWindow({
   const sourcePathLabel = win.sourcePath.replace(/^\/Users\/[^/]+/, "~");
   const lang = useMemo(() => detectLanguage(win.sourcePath), [win.sourcePath]);
 
-  const readContentForRequest = useCallback((thisRequest: number, isCancelled: () => boolean) => {
-    setLoading(true);
-    setError(null);
+  const readContentForRequest = useCallback(
+    (thisRequest: number, isCancelled: () => boolean, isInitial: boolean) => {
+      // Only show the "Loading…" placeholder on the first read for this file.
+      // Watcher-driven refreshes keep the current content rendered until the new
+      // text is ready, so an unrelated file changing in the workspace (or our own
+      // atomic save) does not blank the view. This is the no-flicker swap editors do.
+      if (isInitial) {
+        setLoading(true);
+        setError(null);
+      }
 
-    invoke<string>("read_code_file_content", { path: win.sourcePath })
-      .then((text) => {
-        if (!isCancelled() && requestIdRef.current === thisRequest) setContent(text);
-      })
-      .catch((err) => {
-        if (!isCancelled() && requestIdRef.current === thisRequest) setError(String(err));
-      })
-      .finally(() => {
-        if (!isCancelled() && requestIdRef.current === thisRequest) setLoading(false);
-      });
-  }, [win.sourcePath]);
+      invoke<string>("read_code_file_content", { path: win.sourcePath })
+        .then((text) => {
+          if (!isCancelled() && requestIdRef.current === thisRequest) setContent(text);
+        })
+        .catch((err) => {
+          if (!isCancelled() && requestIdRef.current !== thisRequest) return;
+          // On refresh keep the last good content instead of flashing an error —
+          // atomic saves briefly unlink the file and would otherwise blink.
+          if (isInitial && !isCancelled()) setError(String(err));
+        })
+        .finally(() => {
+          if (isInitial && !isCancelled() && requestIdRef.current === thisRequest) setLoading(false);
+        });
+    },
+    [win.sourcePath],
+  );
 
   // Load file content from disk
   useEffect(() => {
@@ -112,7 +124,7 @@ export default memo(function CodeWindow({
     requestIdRef.current += 1;
     const thisRequest = requestIdRef.current;
 
-    readContentForRequest(thisRequest, () => cancelled);
+    readContentForRequest(thisRequest, () => cancelled, true);
 
     return () => { cancelled = true; };
   }, [readContentForRequest]);
@@ -169,7 +181,7 @@ export default memo(function CodeWindow({
       if (workspaceRoot && event.payload !== workspaceRoot) return;
       requestIdRef.current += 1;
       const thisRequest = requestIdRef.current;
-      readContentForRequest(thisRequest, () => cancelled);
+      readContentForRequest(thisRequest, () => cancelled, false);
 
       if (win.viewMode === "changes" && workspaceRoot) {
         invoke<DiffLine[]>("get_file_diff", { path: win.sourcePath, root: workspaceRoot })
