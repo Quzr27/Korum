@@ -1,12 +1,20 @@
 /* ── xterm ── */
 .terminal-container {
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
-  padding: 2px 4px 4px;
 }
 
 .terminal-container .xterm {
+  /* Gutter lives on the xterm element (term.element), NOT the container.
+     FitAddon subtracts term.element padding when computing cols/rows, so the
+     text is inset on both sides — but the scroll viewport is positioned
+     absolutely against the padding box, so the scrollbar stays flush to the
+     window's right edge instead of floating inside the gutter. border-box so
+     height:100% includes the padding and the grid never overflows/clips. */
+  box-sizing: border-box;
   height: 100%;
+  padding: 2px 12px 4px;
 }
 
 /* ── Terminal error overlay ── */

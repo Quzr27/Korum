@@ -657,13 +657,18 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
   const worldH = maxY - minY || 1;
   const padded = MINIMAP_PAD;
 
-  // Scale to fit minimap
-  const scaleX = (MINIMAP_W - padded * 2) / worldW;
-  const scaleY = (MINIMAP_H - padded * 2) / worldH;
-  const scale = Math.min(scaleX, scaleY);
+  // Scale to fit minimap (preserve world aspect ratio)
+  const availW = MINIMAP_W - padded * 2;
+  const availH = MINIMAP_H - padded * 2;
+  const scale = Math.min(availW / worldW, availH / worldH);
 
-  const toMiniX = (wx: number) => padded + (wx - minX) * scale;
-  const toMiniY = (wy: number) => padded + (wy - minY) * scale;
+  // Centre the scaled content so leftover space is balanced on both axes;
+  // otherwise the map is anchored top-left and leaves a gap on the right/bottom.
+  const offX = padded + (availW - worldW * scale) / 2;
+  const offY = padded + (availH - worldH * scale) / 2;
+
+  const toMiniX = (wx: number) => offX + (wx - minX) * scale;
+  const toMiniY = (wy: number) => offY + (wy - minY) * scale;
 
   // Viewport rect in minimap coords
   let vpRect = null;
@@ -678,12 +683,26 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
     };
   }
 
+  // Corner-bracket "viewfinder" path for the viewport lens — only when the
+  // viewport is large enough that 4 brackets read cleanly (when zoomed in it
+  // shrinks, so fall back to the plain bordered lens below).
+  let vpBracketPath: string | null = null;
+  if (vpRect && vpRect.w >= 24 && vpRect.h >= 18) {
+    const { x, y, w, h } = vpRect;
+    const L = Math.min(6, vpRect.w / 3, vpRect.h / 3);
+    vpBracketPath =
+      `M${x},${y + L} L${x},${y} L${x + L},${y}` +
+      ` M${x + w - L},${y} L${x + w},${y} L${x + w},${y + L}` +
+      ` M${x + w},${y + h - L} L${x + w},${y + h} L${x + w - L},${y + h}` +
+      ` M${x + L},${y + h} L${x},${y + h} L${x},${y + h - L}`;
+  }
+
   const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     const buttonRect = e.currentTarget.getBoundingClientRect();
     const mx = ((e.clientX - buttonRect.left) / buttonRect.width) * MINIMAP_W;
     const my = ((e.clientY - buttonRect.top) / buttonRect.height) * MINIMAP_H;
-    const worldX = minX + (mx - padded) / scale;
-    const worldY = minY + (my - padded) / scale;
+    const worldX = minX + (mx - offX) / scale;
+    const worldY = minY + (my - offY) / scale;
     onNavigate(worldX, worldY);
   };
 
@@ -705,8 +724,8 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
             y={toMiniY(w.y)}
             width={w.width * scale}
             height={w.height * scale}
-            rx={1}
-            className={w.id === activeWindowId ? "fill-primary/40 stroke-primary" : "fill-muted-foreground/20 stroke-muted-foreground/30"}
+            rx={2}
+            className={w.id === activeWindowId ? "fill-primary/45 stroke-primary" : "fill-muted-foreground/25 stroke-muted-foreground/15"}
             strokeWidth={0.5}
           />
         ))}
@@ -729,19 +748,31 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
           );
         })}
 
-        {/* Viewport indicator */}
+        {/* Viewport "lens" — a soft neutral region with a crisp frame and
+            corner brackets (viewfinder). Neutral on purpose: the accent colour
+            stays reserved for the active window. */}
         {vpRect && (
-          <rect
-            x={vpRect.x}
-            y={vpRect.y}
-            width={vpRect.w}
-            height={vpRect.h}
-            rx={1}
-            fill="none"
-            className="stroke-foreground/30"
-            strokeWidth={1}
-            strokeDasharray="3 2"
-          />
+          <g className="pointer-events-none">
+            <rect
+              x={vpRect.x}
+              y={vpRect.y}
+              width={vpRect.w}
+              height={vpRect.h}
+              rx={2.5}
+              className="fill-foreground/5 stroke-foreground/30"
+              strokeWidth={1}
+            />
+            {vpBracketPath && (
+              <path
+                d={vpBracketPath}
+                fill="none"
+                className="stroke-foreground/60"
+                strokeWidth={1.25}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            )}
+          </g>
         )}
       </svg>
     </button>
