@@ -128,9 +128,11 @@ export default memo(function Canvas({
   // PTYs survive in Rust; code/note content re-loads on remount.
   // Active window is always rendered (user might be editing).
   const renderedWindows = useMemo(() => {
-    const rect = viewportRef.current?.getBoundingClientRect();
-    const vpW = rect?.width ?? window.innerWidth;
-    const vpH = rect?.height ?? window.innerHeight;
+    // Reuse the cached viewport size (maintained by the resize listener + layout
+    // effect) instead of getBoundingClientRect() — avoids a forced layout read
+    // on every Canvas render. Culling has a 600–800px buffer, so the rare
+    // clientWidth/innerWidth drift before the first layout effect is harmless.
+    const { width: vpW, height: vpH } = viewportSizeRef.current;
     return visibleWindows.filter((w) => {
       if (w.id === activeWindowId) return true;
       const buffer = w.type === "terminal" ? 600 : 800;
@@ -260,9 +262,8 @@ export default memo(function Canvas({
     syncTetherLayer();
   }, [syncTetherLayer]);
 
-  const viewportRect = viewportRef.current?.getBoundingClientRect();
-  const viewportWidth = viewportRect?.width ?? window.innerWidth;
-  const viewportHeight = viewportRect?.height ?? window.innerHeight;
+  // Cached size (see renderedWindows) — no forced layout read per render.
+  const { width: viewportWidth, height: viewportHeight } = viewportSizeRef.current;
   const liveSelection = selectLiveTerminalIds({
     windows,
     activeWorkspaceId,
@@ -594,6 +595,7 @@ export default memo(function Canvas({
                   id={w.id}
                   window={w}
                   isActive={activeWindowId === w.id}
+                  zoom={zoom}
                   zoomRef={zoomRef}
                   snapTargetsRef={snapTargetsRef}
                   snapGuideLayerRef={snapGuideLayerRef}
@@ -658,7 +660,8 @@ export default memo(function Canvas({
         activeWindowId={activeWindowId}
         pan={pan}
         zoom={zoom}
-        viewportRef={viewportRef}
+        viewportWidth={viewportWidth}
+        viewportHeight={viewportHeight}
         onNavigate={handleMinimapNavigate}
       />
     </>
@@ -672,11 +675,12 @@ interface MinimapProps {
   activeWindowId: string | null;
   pan: Point2D;
   zoom: number;
-  viewportRef: React.RefObject<HTMLDivElement | null>;
+  viewportWidth: number;
+  viewportHeight: number;
   onNavigate: (worldX: number, worldY: number) => void;
 }
 
-const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, viewportRef, onNavigate }: MinimapProps) {
+const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, viewportWidth, viewportHeight, onNavigate }: MinimapProps) {
   if (windows.length === 0) return null;
 
   // Compute world bounds from visible windows
@@ -688,18 +692,13 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
     maxY = Math.max(maxY, w.y + w.height);
   }
 
-  // Add viewport bounds to the world extent
-  const rect = viewportRef.current?.getBoundingClientRect();
-  if (rect) {
-    const vpLeft = -pan.x / zoom;
-    const vpTop = -pan.y / zoom;
-    const vpRight = vpLeft + rect.width / zoom;
-    const vpBottom = vpTop + rect.height / zoom;
-    minX = Math.min(minX, vpLeft);
-    minY = Math.min(minY, vpTop);
-    maxX = Math.max(maxX, vpRight);
-    maxY = Math.max(maxY, vpBottom);
-  }
+  // Add viewport bounds to the world extent (cached size — no layout read)
+  const vpLeft = -pan.x / zoom;
+  const vpTop = -pan.y / zoom;
+  minX = Math.min(minX, vpLeft);
+  minY = Math.min(minY, vpTop);
+  maxX = Math.max(maxX, vpLeft + viewportWidth / zoom);
+  maxY = Math.max(maxY, vpTop + viewportHeight / zoom);
 
   const worldW = maxX - minX || 1;
   const worldH = maxY - minY || 1;
@@ -719,17 +718,12 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
   const toMiniY = (wy: number) => offY + (wy - minY) * scale;
 
   // Viewport rect in minimap coords
-  let vpRect = null;
-  if (rect) {
-    const vpLeft = -pan.x / zoom;
-    const vpTop = -pan.y / zoom;
-    vpRect = {
-      x: toMiniX(vpLeft),
-      y: toMiniY(vpTop),
-      w: (rect.width / zoom) * scale,
-      h: (rect.height / zoom) * scale,
-    };
-  }
+  const vpRect = {
+    x: toMiniX(vpLeft),
+    y: toMiniY(vpTop),
+    w: (viewportWidth / zoom) * scale,
+    h: (viewportHeight / zoom) * scale,
+  };
 
   // Corner-bracket "viewfinder" path for the viewport lens — only when the
   // viewport is large enough that 4 brackets read cleanly (when zoomed in it

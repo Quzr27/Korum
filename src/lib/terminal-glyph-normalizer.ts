@@ -4,6 +4,10 @@ const TERMINAL_STATUS_GLYPH_REPLACEMENTS: ReadonlyArray<readonly [RegExp, string
 ];
 
 export function normalizeTerminalStatusGlyphs(text: string): string {
+  // Fast path: these source emoji only appear in Claude/Codex statuslines, so
+  // the vast majority of output (and every flood) contains neither. A cheap
+  // substring check skips the regex replacements on the hot streaming path.
+  if (!text.includes("\u{1f4c1}") && !text.includes("\u{1f500}")) return text;
   let normalized = text;
   for (const [source, replacement] of TERMINAL_STATUS_GLYPH_REPLACEMENTS) {
     normalized = normalized.replace(source, replacement);

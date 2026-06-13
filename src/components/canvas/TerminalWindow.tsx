@@ -1,10 +1,9 @@
 import { memo, useEffect, useRef, useCallback, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useSettings } from "@/lib/settings-context";
 import { getXtermTheme, TERMINAL_FONT_FAMILIES } from "@/lib/settings";
-import { useXtermSession } from "@/lib/xterm-session";
+import { useXtermSession, type PendingDispose } from "@/lib/xterm-session";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
 import {
@@ -100,7 +99,7 @@ export default memo(function TerminalWindow({
   });
   const termRef = useRef<HTMLDivElement>(null);
   const ptyIdRef = useRef<string | null>(null);
-  const pendingDisposeRef = useRef<{ term: Terminal; timer: number } | null>(null);
+  const pendingDisposeRef = useRef<PendingDispose | null>(null);
   const mountedRef = useRef(false);
   const mountVersionRef = useRef(0);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -118,12 +117,16 @@ export default memo(function TerminalWindow({
     onHydrationSettled(id);
   }, [id, onHydrationSettled]);
 
-  const flushPendingDispose = useCallback(() => {
+  const flushPendingDispose = useCallback((): string | null => {
     const pendingDispose = pendingDisposeRef.current;
-    if (!pendingDispose) return;
+    if (!pendingDispose) return null;
     window.clearTimeout(pendingDispose.timer);
+    // Run the deferred snapshot capture before disposing so a fast reattach can
+    // restore scrollback even though the timer slot hadn't fired yet.
+    const snapshot = pendingDispose.capture?.() ?? null;
     pendingDispose.term.dispose();
     pendingDisposeRef.current = null;
+    return snapshot;
   }, []);
 
   useEffect(() => {

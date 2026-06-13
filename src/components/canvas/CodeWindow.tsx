@@ -20,13 +20,23 @@ import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useSettings } from "@/lib/settings-context";
 import { CODE_THEMES, CODE_THEME_LABELS, CODE_THEME_BG } from "@/lib/settings/types";
-import { tokenizeCode } from "@/lib/shiki";
+import { tokenizeCode, tokenizeCodeLines } from "@/lib/shiki";
 import { detectLanguage } from "@/lib/lang-detect";
 import { useDragResize, type WindowMotionRect } from "@/lib/use-drag-resize";
 import { shouldHandleCodeTarget } from "@/lib/code-window-target";
+import { getVirtualCodeRows } from "@/lib/code-window-virtualization";
+import { getCodeWindowPerformancePolicy } from "@/lib/code-window-performance";
+import { createCodeLineHtmlCache, type CodeLineHtmlCache } from "@/lib/code-window-rendering";
 import type { SnapTargetRect } from "@/lib/window-snapping";
 import type { CodeWindow as CodeWindowState, CodeViewMode, DiffLine, WindowUpdatable } from "@/types";
 import type { ThemedToken } from "shiki";
+
+const CODE_ROW_HEIGHT = 19.5; // 13px code font × leading 1.5
+const CODE_ROW_OVERSCAN = 24;
+const CODE_LINE_HTML_CACHE_SIZE = 2_000;
+const CODE_FULL_TOKENIZE_IDLE_DELAY_MS = 650;
+const CODE_FULL_TOKENIZE_EAGER_DELAY_MS = 120;
+const CODE_PREVIEW_LINE_COUNT = 80;
 
 interface MinimapRow {
   tokens: ThemedToken[] | null;
@@ -34,10 +44,25 @@ interface MinimapRow {
   type: "normal" | "add" | "delete";
 }
 
+type CodeRenderRow =
+  | { kind: "file"; key: string; lineNumber: number; tokens: ThemedToken[] | null; text: string }
+  | { kind: "diff-line"; key: string; lineNumber: number; oldLine: number | ""; tokens: ThemedToken[] | null; text: string; added: boolean }
+  | { kind: "diff-delete"; key: string; oldLine: number | ""; text: string };
+
+interface HighlightState {
+  content: string;
+  lang: string;
+  theme: string;
+  lines: Array<ThemedToken[] | null>;
+  full: boolean;
+  tokenCount: number;
+}
+
 interface Props {
   id: string;
   window: CodeWindowState;
   isActive: boolean;
+  zoom: number;
   zoomRef: React.RefObject<number>;
   snapTargetsRef: React.RefObject<readonly SnapTargetRect[]>;
   snapGuideLayerRef: React.RefObject<HTMLDivElement | null>;
@@ -51,10 +76,64 @@ interface Props {
   onLiveRectChange?: (id: string, rect: WindowMotionRect | null) => void;
 }
 
+function splitCodeLines(content: string): string[] {
+  return content.split(/\r\n|\r|\n/);
+}
+
+function countTokenSpans(lines: readonly (readonly ThemedToken[] | null)[]): number {
+  let count = 0;
+  for (const line of lines) count += line?.length ?? 0;
+  return count;
+}
+
+function normalizeTokenLines(tokens: ThemedToken[][], lineCount: number): ThemedToken[][] {
+  return Array.from({ length: lineCount }, (_, i) => tokens[i] ?? []);
+}
+
+function renderCodeCell(tokens: ThemedToken[] | null, text: string, htmlCache: CodeLineHtmlCache) {
+  return {
+    __html: tokens ? htmlCache.getTokenLine(tokens) : htmlCache.getPlainLine(text),
+  };
+}
+
+function renderCodeRow(row: CodeRenderRow, htmlCache: CodeLineHtmlCache) {
+  if (row.kind === "file") {
+    return (
+      <tr key={row.key} className={`code-line${row.tokens ? "" : " code-line-pending"}`} data-line={row.lineNumber}>
+        <td className="code-gutter">{row.lineNumber}</td>
+        <td className="code-cell" dangerouslySetInnerHTML={renderCodeCell(row.tokens, row.text, htmlCache)} />
+      </tr>
+    );
+  }
+
+  if (row.kind === "diff-delete") {
+    return (
+      <tr key={row.key} className="code-line diff-delete">
+        <td className="code-gutter diff-gutter-old">{row.oldLine}</td>
+        <td className="code-gutter diff-gutter-new" />
+        <td className="code-cell" dangerouslySetInnerHTML={{ __html: htmlCache.getPlainLine(row.text) }} />
+      </tr>
+    );
+  }
+
+  return (
+    <tr
+      key={row.key}
+      className={`code-line ${row.added ? "diff-add" : ""}${row.tokens ? "" : " code-line-pending"}`}
+      data-line={row.lineNumber}
+    >
+      <td className="code-gutter diff-gutter-old">{row.oldLine}</td>
+      <td className="code-gutter diff-gutter-new">{row.lineNumber}</td>
+      <td className="code-cell" dangerouslySetInnerHTML={renderCodeCell(row.tokens, row.text, htmlCache)} />
+    </tr>
+  );
+}
+
 export default memo(function CodeWindow({
   id,
   window: win,
   isActive,
+  zoom,
   zoomRef,
   snapTargetsRef,
   snapGuideLayerRef,
@@ -80,15 +159,35 @@ export default memo(function CodeWindow({
 
   // Content state — loaded from disk, not persisted
   const [content, setContent] = useState<string | null>(null);
-  const [tokens, setTokens] = useState<ThemedToken[][] | null>(null);
   const [diffLines, setDiffLines] = useState<DiffLine[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [highlightState, setHighlightState] = useState<HighlightState | null>(null);
 
   const requestIdRef = useRef(0);
+  const highlightVersionRef = useRef(0);
+  const htmlCacheRef = useRef(createCodeLineHtmlCache(CODE_LINE_HTML_CACHE_SIZE));
   const accent = wsColor ?? "var(--muted-foreground)";
   const sourcePathLabel = win.sourcePath.replace(/^\/Users\/[^/]+/, "~");
   const lang = useMemo(() => detectLanguage(win.sourcePath), [win.sourcePath]);
+  const sourceLines = useMemo(() => (content == null ? null : splitCodeLines(content)), [content]);
+  const validHighlightState =
+    highlightState &&
+    content != null &&
+    highlightState.content === content &&
+    highlightState.lang === lang &&
+    highlightState.theme === codeTheme
+      ? highlightState
+      : null;
+  const lineTokens = validHighlightState?.lines ?? null;
+  const lineCount = sourceLines?.length ?? 0;
+  const performancePolicy = useMemo(() => getCodeWindowPerformancePolicy({
+    lineCount,
+    byteLength: content?.length ?? 0,
+    tokenCount: validHighlightState?.tokenCount,
+    zoom,
+    isActive,
+  }), [content?.length, isActive, lineCount, validHighlightState?.tokenCount, zoom]);
 
   const readContentForRequest = useCallback(
     (thisRequest: number, isCancelled: () => boolean, isInitial: boolean) => {
@@ -129,30 +228,27 @@ export default memo(function CodeWindow({
     return () => { cancelled = true; };
   }, [readContentForRequest]);
 
-  // Tokenize content with Shiki.
-  // Debounce only content changes (rapid file-tree-changed events); theme/lang
-  // changes apply immediately so the dropdown feels instant.
-  const prevContentRef = useRef(content);
+  // Reset highlighting when the file, language, or theme changes. Plain text
+  // rows can render immediately; Shiki fills visible rows first and the whole
+  // file later from a worker.
   useEffect(() => {
-    if (content == null) return;
-    let cancelled = false;
-    const contentChanged = prevContentRef.current !== content;
-    prevContentRef.current = content;
+    highlightVersionRef.current += 1;
+    htmlCacheRef.current.clear();
 
-    const run = () => {
-      tokenizeCode(content, lang, codeTheme).then((result) => {
-        if (!cancelled) setTokens(result);
-      });
-    };
-
-    if (contentChanged) {
-      const timer = setTimeout(run, 150);
-      return () => { cancelled = true; clearTimeout(timer); };
+    if (content == null || sourceLines == null) {
+      setHighlightState(null);
+      return;
     }
 
-    run();
-    return () => { cancelled = true; };
-  }, [content, lang, codeTheme]);
+    setHighlightState({
+      content,
+      lang,
+      theme: codeTheme,
+      lines: Array.from({ length: sourceLines.length }, () => null),
+      full: false,
+      tokenCount: 0,
+    });
+  }, [codeTheme, content, lang, sourceLines]);
 
   // Load diff annotations when in changes mode
   useEffect(() => {
@@ -234,22 +330,41 @@ export default memo(function CodeWindow({
   const highlightTimerRef = useRef<number | null>(null);
   const highlightedRowRef = useRef<HTMLTableRowElement | null>(null);
   const lastHandledTargetNonceRef = useRef<number | null>(null);
+  const [virtualViewport, setVirtualViewport] = useState({ scrollTop: 0, height: 0 });
 
-  // ── Rendered content (rows only) ──
-  const fileRows = useMemo(() => {
-    if (tokens == null) return null;
-    return tokens.map((lineTokens, i) => (
-      <tr key={i} className="code-line" data-line={i + 1}>
-        <td className="code-gutter">{i + 1}</td>
-        <td className="code-cell">
-          {lineTokens.map((token, j) => (
-            <span key={j} style={{ color: token.color }}>{token.content}</span>
-          ))}
-          {lineTokens.length === 0 && "\u00a0"}
-        </td>
-      </tr>
+  const updateVirtualViewport = useCallback(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+
+    const next = { scrollTop: scroller.scrollTop, height: scroller.clientHeight };
+    setVirtualViewport((prev) => (
+      prev.scrollTop === next.scrollTop && prev.height === next.height ? prev : next
     ));
-  }, [tokens]);
+  }, []);
+
+  // Gutter width is driven by the line-number digit count so all rows align
+  // (block/flex rows can't auto-size a shared column the way a <table> did).
+  const gutterCh = useMemo(() => {
+    let maxLine = lineCount;
+    if (diffLines) {
+      for (const line of diffLines) {
+        maxLine = Math.max(maxLine, line.old_lineno ?? 0, line.new_lineno ?? 0);
+      }
+    }
+    return Math.max(2, String(maxLine).length);
+  }, [diffLines, lineCount]);
+
+  // ── Render row data (React nodes are created only for the virtual slice) ──
+  const fileRows = useMemo(() => {
+    if (sourceLines == null) return null;
+    return sourceLines.map((text, i): CodeRenderRow => ({
+      kind: "file",
+      key: `f-${i}`,
+      lineNumber: i + 1,
+      tokens: lineTokens?.[i] ?? null,
+      text,
+    }));
+  }, [lineTokens, sourceLines]);
 
   // Build diff annotation maps from diff lines
   const diffAnnotations = useMemo(() => {
@@ -279,73 +394,238 @@ export default memo(function CodeWindow({
   }, [diffLines]);
 
   const changesRows = useMemo(() => {
-    if (tokens == null || diffAnnotations == null) return null;
+    if (sourceLines == null || diffAnnotations == null) return null;
     const { addedLines, deletedBefore, trailingDeletes } = diffAnnotations;
 
-    if (addedLines.size === 0 && deletedBefore.size === 0 && !trailingDeletes) return "empty";
+    if (addedLines.size === 0 && deletedBefore.size === 0 && !trailingDeletes) return [];
 
-    const rows: React.ReactNode[] = [];
+    const rows: CodeRenderRow[] = [];
     let key = 0;
 
-    for (let i = 0; i < tokens.length; i++) {
+    for (let i = 0; i < sourceLines.length; i++) {
       const lineNum = i + 1;
 
       const deletes = deletedBefore.get(lineNum);
       if (deletes) {
         for (const del of deletes) {
-          rows.push(
-            <tr key={key++} className="code-line diff-delete">
-              <td className="code-gutter diff-gutter-old">{del.old_lineno ?? ""}</td>
-              <td className="code-gutter diff-gutter-new" />
-              <td className="code-cell">{del.content || "\u00a0"}</td>
-            </tr>,
-          );
+          rows.push({
+            kind: "diff-delete",
+            key: `d-${key++}`,
+            oldLine: del.old_lineno ?? "",
+            text: del.content,
+          });
         }
       }
 
       const isAdded = addedLines.has(lineNum);
-      const lineTokens = tokens[i];
-      rows.push(
-        <tr key={key++} className={`code-line ${isAdded ? "diff-add" : ""}`}>
-          <td className="code-gutter diff-gutter-old">{isAdded ? "" : lineNum}</td>
-          <td className="code-gutter diff-gutter-new">{lineNum}</td>
-          <td className="code-cell">
-            {lineTokens.map((token, j) => (
-              <span key={j} style={{ color: token.color }}>{token.content}</span>
-            ))}
-            {lineTokens.length === 0 && "\u00a0"}
-          </td>
-        </tr>,
-      );
+      rows.push({
+        kind: "diff-line",
+        key: `l-${key++}`,
+        lineNumber: lineNum,
+        oldLine: isAdded ? "" : lineNum,
+        tokens: lineTokens?.[i] ?? null,
+        text: sourceLines[i],
+        added: isAdded,
+      });
     }
 
     if (trailingDeletes) {
       for (const del of trailingDeletes) {
-        rows.push(
-          <tr key={key++} className="code-line diff-delete">
-            <td className="code-gutter diff-gutter-old">{del.old_lineno ?? ""}</td>
-            <td className="code-gutter diff-gutter-new" />
-            <td className="code-cell">{del.content || "\u00a0"}</td>
-          </tr>,
-        );
+        rows.push({
+          kind: "diff-delete",
+          key: `d-${key++}`,
+          oldLine: del.old_lineno ?? "",
+          text: del.content,
+        });
       }
     }
 
     return rows;
-  }, [tokens, diffAnnotations]);
+  }, [lineTokens, sourceLines, diffAnnotations]);
+
+  const activeRows = win.viewMode === "file" ? fileRows : changesRows;
+  const activeRowCount = activeRows?.length ?? 0;
+  const virtualRows = useMemo(() => getVirtualCodeRows({
+    rowCount: activeRowCount,
+    scrollTop: virtualViewport.scrollTop,
+    viewportHeight: virtualViewport.height || Math.max(120, win.height - 60),
+    rowHeight: CODE_ROW_HEIGHT,
+    overscan: CODE_ROW_OVERSCAN,
+  }), [activeRowCount, virtualViewport.height, virtualViewport.scrollTop, win.height]);
+  const renderedCodeRows = useMemo(() => {
+    if (!activeRows) return null;
+    const htmlCache = htmlCacheRef.current;
+    return activeRows.slice(virtualRows.start, virtualRows.end).map((row) => renderCodeRow(row, htmlCache));
+  }, [activeRows, virtualRows.end, virtualRows.start]);
+  const changesEmpty = win.viewMode === "changes" && changesRows != null && changesRows.length === 0;
+
+  const visibleFileRange = useMemo(() => {
+    if (!sourceLines || !activeRows || !performancePolicy.tokenizeVisible) return null;
+
+    if (win.viewMode === "file") {
+      return {
+        start: Math.max(0, virtualRows.start),
+        end: Math.min(sourceLines.length, virtualRows.end),
+      };
+    }
+
+    let start = Number.POSITIVE_INFINITY;
+    let end = -1;
+    for (let i = virtualRows.start; i < virtualRows.end; i++) {
+      const row = activeRows[i];
+      if (!row || row.kind !== "diff-line") continue;
+      const index = row.lineNumber - 1;
+      start = Math.min(start, index);
+      end = Math.max(end, index + 1);
+    }
+
+    return end >= start ? { start, end } : null;
+  }, [
+    activeRows,
+    performancePolicy.tokenizeVisible,
+    sourceLines,
+    virtualRows.end,
+    virtualRows.start,
+    win.viewMode,
+  ]);
+
+  useEffect(() => {
+    if (
+      content == null ||
+      sourceLines == null ||
+      lineTokens == null ||
+      visibleFileRange == null ||
+      !performancePolicy.tokenizeVisible
+    ) return;
+
+    const start = Math.max(0, Math.min(sourceLines.length, visibleFileRange.start));
+    const end = Math.max(start, Math.min(sourceLines.length, visibleFileRange.end));
+    if (start === end) return;
+
+    let hasMissingLine = false;
+    for (let i = start; i < end; i++) {
+      if (lineTokens[i] == null) {
+        hasMissingLine = true;
+        break;
+      }
+    }
+    if (!hasMissingLine) return;
+
+    let cancelled = false;
+    const version = highlightVersionRef.current;
+    const visibleLines = sourceLines.slice(start, end);
+
+    tokenizeCodeLines(visibleLines, lang, codeTheme).then((result) => {
+      if (cancelled || version !== highlightVersionRef.current) return;
+
+      setHighlightState((prev) => {
+        if (!prev || prev.content !== content || prev.lang !== lang || prev.theme !== codeTheme) return prev;
+
+        const nextLines = prev.lines.slice();
+        let changed = false;
+        for (let i = 0; i < visibleLines.length; i++) {
+          const lineIndex = start + i;
+          if (nextLines[lineIndex] != null) continue;
+          nextLines[lineIndex] = result[i] ?? [];
+          changed = true;
+        }
+        if (!changed) return prev;
+
+        return {
+          ...prev,
+          lines: nextLines,
+          tokenCount: countTokenSpans(nextLines),
+        };
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    codeTheme,
+    content,
+    lang,
+    lineTokens,
+    performancePolicy.tokenizeVisible,
+    sourceLines,
+    visibleFileRange,
+  ]);
+
+  useEffect(() => {
+    if (
+      content == null ||
+      sourceLines == null ||
+      !performancePolicy.tokenizeFull ||
+      validHighlightState?.full
+    ) return;
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    let idleId: number | null = null;
+    const version = highlightVersionRef.current;
+    const delay = performancePolicy.deferFullTokenization
+      ? CODE_FULL_TOKENIZE_IDLE_DELAY_MS
+      : CODE_FULL_TOKENIZE_EAGER_DELAY_MS;
+
+    const run = () => {
+      tokenizeCode(content, lang, codeTheme).then((result) => {
+        if (cancelled || version !== highlightVersionRef.current) return;
+        const normalizedLines = normalizeTokenLines(result, sourceLines.length);
+
+        setHighlightState((prev) => {
+          if (!prev || prev.content !== content || prev.lang !== lang || prev.theme !== codeTheme) return prev;
+          return {
+            ...prev,
+            lines: normalizedLines,
+            full: true,
+            tokenCount: countTokenSpans(normalizedLines),
+          };
+        });
+      });
+    };
+
+    timeoutId = window.setTimeout(() => {
+      timeoutId = null;
+      if ("requestIdleCallback" in window) {
+        idleId = window.requestIdleCallback(run, { timeout: 1_500 });
+      } else {
+        run();
+      }
+    }, delay);
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      if (idleId !== null && "cancelIdleCallback" in window) window.cancelIdleCallback(idleId);
+    };
+  }, [
+    codeTheme,
+    content,
+    lang,
+    performancePolicy.deferFullTokenization,
+    performancePolicy.tokenizeFull,
+    sourceLines,
+    validHighlightState?.full,
+  ]);
 
   // ── Minimap: build row metadata for canvas drawing ──
   const minimapRows = useMemo((): MinimapRow[] | null => {
-    if (!tokens) return null;
+    if (!sourceLines || !performancePolicy.renderMinimap) return null;
+    const useDetailedTokens = performancePolicy.renderDetailedMinimap;
 
     if (win.viewMode === "file" || !diffAnnotations) {
-      return tokens.map((t) => ({ tokens: t, text: "", type: "normal" }));
+      return sourceLines.map((text, i) => ({
+        tokens: useDetailedTokens ? lineTokens?.[i] ?? null : null,
+        text,
+        type: "normal",
+      }));
     }
 
     const { addedLines, deletedBefore, trailingDeletes } = diffAnnotations;
     const rows: MinimapRow[] = [];
 
-    for (let i = 0; i < tokens.length; i++) {
+    for (let i = 0; i < sourceLines.length; i++) {
       const lineNum = i + 1;
       const deletes = deletedBefore.get(lineNum);
       if (deletes) {
@@ -354,8 +634,8 @@ export default memo(function CodeWindow({
         }
       }
       rows.push({
-        tokens: tokens[i],
-        text: "",
+        tokens: useDetailedTokens ? lineTokens?.[i] ?? null : null,
+        text: sourceLines[i],
         type: addedLines.has(lineNum) ? "add" : "normal",
       });
     }
@@ -365,7 +645,14 @@ export default memo(function CodeWindow({
       }
     }
     return rows;
-  }, [tokens, win.viewMode, diffAnnotations]);
+  }, [
+    diffAnnotations,
+    lineTokens,
+    performancePolicy.renderDetailedMinimap,
+    performancePolicy.renderMinimap,
+    sourceLines,
+    win.viewMode,
+  ]);
 
   // ── Minimap: draw content layer (redrawn when tokens/diff change) ──
   useLayoutEffect(() => {
@@ -423,9 +710,12 @@ export default memo(function CodeWindow({
           if (x >= MINIMAP_W - 2) break;
         }
       } else if (row.text) {
-        // Deleted line — draw muted text hint
         const w = Math.min(row.text.length * CHAR_W, MINIMAP_W - 4);
-        ctx.fillStyle = "rgba(248, 81, 73, 0.4)";
+        ctx.fillStyle = row.type === "delete"
+          ? "rgba(248, 81, 73, 0.4)"
+          : row.type === "add"
+            ? "rgba(63, 185, 80, 0.42)"
+            : "rgba(139, 148, 158, 0.34)";
         ctx.fillRect(2, y + 0.25 * scale, w, scaledLineH - 0.5 * scale);
       }
     }
@@ -473,17 +763,25 @@ export default memo(function CodeWindow({
       line,
       nonce,
       viewMode: win.viewMode,
-      tokensReady: tokens != null,
+      tokensReady: sourceLines != null,
       lastHandledNonce: lastHandledTargetNonceRef.current,
     })) return;
 
     const scroller = scrollRef.current;
     if (!scroller) return;
 
-    const row = scroller.querySelector<HTMLTableRowElement>(`tr[data-line="${line}"]`);
-    if (!row) {
+    if (line == null || line < 1 || line > lineCount) {
       lastHandledTargetNonceRef.current = nonce ?? null;
       onUpdate(id, { targetLine: undefined, targetColumn: undefined, targetNonce: undefined });
+      return;
+    }
+
+    const row = scroller.querySelector<HTMLTableRowElement>(`tr[data-line="${line}"]`);
+    if (!row) {
+      const targetTop = (line - 1) * CODE_ROW_HEIGHT;
+      scroller.scrollTop = Math.max(0, targetTop - scroller.clientHeight / 2 + CODE_ROW_HEIGHT / 2);
+      updateVirtualViewport();
+      updateMinimapViewport();
       return;
     }
 
@@ -491,6 +789,7 @@ export default memo(function CodeWindow({
       lastHandledTargetNonceRef.current = nonce ?? null;
       onUpdate(id, { targetLine: undefined, targetColumn: undefined, targetNonce: undefined });
       row.scrollIntoView({ block: "center", inline: "nearest" });
+      updateVirtualViewport();
       updateMinimapViewport();
       highlightedRowRef.current?.classList.remove("code-line-target");
       row.classList.add("code-line-target");
@@ -508,8 +807,22 @@ export default memo(function CodeWindow({
       }, 2600);
     });
 
-    return () => cancelAnimationFrame(raf);
-  }, [id, onUpdate, tokens, updateMinimapViewport, win.targetLine, win.targetNonce, win.viewMode]);
+    return () => {
+      cancelAnimationFrame(raf);
+    };
+  }, [
+    id,
+    lineCount,
+    onUpdate,
+    sourceLines,
+    updateMinimapViewport,
+    updateVirtualViewport,
+    virtualRows.end,
+    virtualRows.start,
+    win.targetLine,
+    win.targetNonce,
+    win.viewMode,
+  ]);
 
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -517,10 +830,14 @@ export default memo(function CodeWindow({
 
     const onScroll = () => {
       cancelAnimationFrame(viewportRafRef.current);
-      viewportRafRef.current = requestAnimationFrame(updateMinimapViewport);
+      viewportRafRef.current = requestAnimationFrame(() => {
+        updateVirtualViewport();
+        updateMinimapViewport();
+      });
     };
     scroller.addEventListener("scroll", onScroll, { passive: true });
     // Initial draw
+    updateVirtualViewport();
     updateMinimapViewport();
 
     const canvasEl = minimapCanvasRef.current;
@@ -531,7 +848,7 @@ export default memo(function CodeWindow({
       const indicator = canvasEl?.parentElement?.querySelector(".code-minimap-viewport");
       indicator?.remove();
     };
-  }, [updateMinimapViewport, minimapRows]);
+  }, [activeRowCount, minimapRows, updateMinimapViewport, updateVirtualViewport]);
 
   // ── Minimap: click to navigate ──
   const handleMinimapClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -544,7 +861,21 @@ export default memo(function CodeWindow({
     const ratio = clickY / canvas.clientHeight;
     const targetScroll = ratio * scroller.scrollHeight - scroller.clientHeight / 2;
     scroller.scrollTop = Math.max(0, targetScroll);
-  }, []);
+    updateVirtualViewport();
+    updateMinimapViewport();
+  }, [updateMinimapViewport, updateVirtualViewport]);
+
+  const previewRows = useMemo(() => {
+    if (!sourceLines || !performancePolicy.previewMode) return null;
+    const htmlCache = htmlCacheRef.current;
+
+    return sourceLines.slice(0, CODE_PREVIEW_LINE_COUNT).map((text, i) => (
+      <div key={i} className="code-preview-line">
+        <span className="code-preview-gutter">{i + 1}</span>
+        <span className="code-preview-cell" dangerouslySetInnerHTML={{ __html: htmlCache.getPlainLine(text) }} />
+      </div>
+    ));
+  }, [performancePolicy.previewMode, sourceLines]);
 
   return (
     <ContextMenu>
@@ -691,15 +1022,49 @@ export default memo(function CodeWindow({
               <div className="flex h-full items-center justify-center text-destructive/60 text-xs px-4 text-center">
                 {error}
               </div>
-            ) : changesRows === "empty" && win.viewMode === "changes" ? (
+            ) : changesEmpty ? (
               <div className="flex h-full items-center justify-center text-muted-foreground/50 text-xs">
                 No changes
               </div>
+            ) : performancePolicy.previewMode && previewRows ? (
+              <div
+                className="code-preview size-full overflow-hidden font-mono text-[13px] leading-[1.5]"
+                style={{ background: themeBg, "--code-gutter-ch": gutterCh } as React.CSSProperties}
+              >
+                {previewRows}
+              </div>
             ) : (
               <div className="flex size-full overflow-hidden" style={{ background: themeBg }}>
-                <div className="code-viewer flex-1 min-w-0 h-full overflow-auto" ref={scrollRef} role="presentation">
+                <div
+                  className="code-viewer flex-1 min-w-0 h-full overflow-auto"
+                  ref={scrollRef}
+                  role="presentation"
+                  style={{ "--code-gutter-ch": gutterCh } as React.CSSProperties}
+                >
                   <table className="w-full border-collapse font-mono text-[13px] leading-[1.5] [tab-size:4]">
-                    <tbody>{win.viewMode === "file" ? fileRows : changesRows}</tbody>
+                    <tbody>
+                      {virtualRows.topPadding > 0 && (
+                        <tr
+                          key="top-spacer"
+                          className="code-virtual-spacer"
+                          style={{ height: virtualRows.topPadding }}
+                          aria-hidden="true"
+                        >
+                          <td colSpan={3} />
+                        </tr>
+                      )}
+                      {renderedCodeRows}
+                      {virtualRows.bottomPadding > 0 && (
+                        <tr
+                          key="bottom-spacer"
+                          className="code-virtual-spacer"
+                          style={{ height: virtualRows.bottomPadding }}
+                          aria-hidden="true"
+                        >
+                          <td colSpan={3} />
+                        </tr>
+                      )}
+                    </tbody>
                   </table>
                 </div>
                 {minimapRows && (

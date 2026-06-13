@@ -18,6 +18,7 @@ const CLAUDE_POLL_INTERVAL_MS: u64 = 2_000;
 const CLAUDE_ERROR_BACKOFF_MS: u64 = 10_000;
 const RECENT_SCROLLBACK_LINES: usize = 80;
 const WAITING_TAIL_LINES: usize = 12;
+const AGENT_PROBE_SCROLLBACK_BYTES: usize = 32_768;
 const RECENT_CODEX_FS_MS: u64 = 2_500;
 const CODEX_SESSION_SCAN_MAX_FILES: usize = 2_048;
 const CODEX_SESSION_SCAN_MAX_DEPTH: usize = 8;
@@ -145,6 +146,10 @@ struct StatusProbe {
     probe: Option<PtyAgentProbe>,
     kind: AgentKind,
     process_cwd: Option<String>,
+    /// `strip_ansi(scrollback).to_ascii_lowercase()` computed once during kind
+    /// detection (when the scrollback fallback ran), reused by the activity
+    /// classifier so the ~100KB buffer isn't stripped twice per poll tick.
+    cleaned_scrollback: Option<String>,
 }
 
 /// Per-pid cache entry for `process_command_for_pid`. A running process's
@@ -172,6 +177,36 @@ impl ProcessCommandCache {
     /// Remove cache entries whose pids are not in `active_pids`.
     fn retain_pids(&mut self, active_pids: &HashSet<i32>) {
         self.commands.retain(|pid, _| active_pids.contains(pid));
+    }
+}
+
+/// Per-pid cache for `process_cwd_for_pid`. Resolving a foreground process's
+/// cwd costs a `/usr/sbin/lsof` fork on macOS; at 50 terminals an uncached
+/// per-tick spawn is a ~25 fork/s storm. A long-running agent process
+/// effectively never `chdir`s mid-session, and cwd is only ever the
+/// single-owner *fallback* correlator for Claude (pid is the primary match),
+/// so a pid-lifetime cache is safe; entries evict when the pid disappears.
+#[derive(Default)]
+struct ProcessCwdCache {
+    cwds: HashMap<i32, String>,
+}
+
+impl ProcessCwdCache {
+    /// Return the cached cwd for `pid`, calling `process_cwd_for_pid` on a
+    /// cache miss and storing the result. Stale entries (pids no longer
+    /// present in the current poll) should be evicted via `retain_pids`.
+    fn get(&mut self, pid: i32) -> Option<String> {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.cwds.entry(pid) {
+            if let Some(cwd) = process_cwd_for_pid(pid) {
+                e.insert(cwd);
+            }
+        }
+        self.cwds.get(&pid).cloned()
+    }
+
+    /// Remove cache entries whose pids are not in `active_pids`.
+    fn retain_pids(&mut self, active_pids: &HashSet<i32>) {
+        self.cwds.retain(|pid, _| active_pids.contains(pid));
     }
 }
 
@@ -256,6 +291,7 @@ impl AgentStatusState {
             let mut claude_cache = ClaudeAgentsCache::default();
             let mut working_memory: HashMap<String, u64> = HashMap::new();
             let mut cmd_cache = ProcessCommandCache::default();
+            let mut cwd_cache = ProcessCwdCache::default();
             // Track consecutive app.emit() failures so we stop trying after
             // the app window has been torn down.
             let mut consecutive_emit_failures: u32 = 0;
@@ -273,6 +309,7 @@ impl AgentStatusState {
                         &mut claude_cache,
                         &mut working_memory,
                         &mut cmd_cache,
+                        &mut cwd_cache,
                         now,
                     );
                     let changed = state.replace_changed_statuses(statuses);
@@ -345,6 +382,7 @@ fn build_agent_statuses(
     claude_cache: &mut ClaudeAgentsCache,
     working_memory: &mut HashMap<String, u64>,
     cmd_cache: &mut ProcessCommandCache,
+    cwd_cache: &mut ProcessCwdCache,
     now: u64,
 ) -> Vec<AgentStatus> {
     // Collect current foreground pids so we can evict stale cache entries.
@@ -353,28 +391,41 @@ fn build_agent_statuses(
     let probes = registrations
         .iter()
         .map(|registration| {
-            let probe = pty_state.agent_probe(&registration.pty_id).ok();
+            let probe = pty_state
+                .agent_probe(&registration.pty_id, AGENT_PROBE_SCROLLBACK_BYTES)
+                .ok();
             // Track active pids for cache eviction below.
             if let Some(pid) = probe.as_ref().and_then(|p| p.foreground_process_group) {
                 active_pids.insert(pid);
             }
             // Use cached command lookup so we don't fork /bin/ps every 2 s per terminal.
-            let kind = detect_agent_kind_cached(probe.as_ref(), cmd_cache);
-            let process_cwd = probe
-                .as_ref()
-                .and_then(|probe| probe.foreground_process_group)
-                .and_then(process_cwd_for_pid);
+            let (kind, cleaned_scrollback) = detect_agent_kind_cached(probe.as_ref(), cmd_cache);
+            // Resolving the live foreground cwd costs a `/usr/sbin/lsof` fork.
+            // `effective_cwd` (the only reader of `process_cwd`) is consumed
+            // solely on the `AgentKind::Claude` correlation path, so skip the
+            // probe entirely for non-Claude terminals and serve Claude ones
+            // from a pid-keyed cache — otherwise 50 terminals fork lsof per tick.
+            let process_cwd = if kind == AgentKind::Claude {
+                probe
+                    .as_ref()
+                    .and_then(|probe| probe.foreground_process_group)
+                    .and_then(|pid| cwd_cache.get(pid))
+            } else {
+                None
+            };
             StatusProbe {
                 registration: registration.clone(),
                 probe,
                 kind,
                 process_cwd,
+                cleaned_scrollback,
             }
         })
         .collect::<Vec<_>>();
 
-    // Evict cached commands for pids that are no longer the foreground process.
+    // Evict cached commands/cwds for pids that are no longer the foreground process.
     cmd_cache.retain_pids(&active_pids);
+    cwd_cache.retain_pids(&active_pids);
 
     let has_claude = probes.iter().any(|probe| probe.kind == AgentKind::Claude);
     let claude_cwds = probes
@@ -445,16 +496,32 @@ fn status_from_probe(
             .probe
             .as_ref()
             .and_then(|pty_probe| pty_probe.foreground_process_group);
-        if let Some(record) = pgid.and_then(|pgid| correlate_claude_record_by_pid(pgid, claude_records)) {
-            let activity = escalate_claude_activity(record.activity.clone(), probe);
-            return (claude_json_status(probe, &activity, now), working_stamp(&activity, now));
+        if let Some(record) =
+            pgid.and_then(|pgid| correlate_claude_record_by_pid(pgid, claude_records))
+        {
+            let activity = escalate_claude_activity(
+                record.activity.clone(),
+                probe,
+                probe.cleaned_scrollback.as_deref(),
+            );
+            return (
+                claude_json_status(probe, &activity, now),
+                working_stamp(&activity, now),
+            );
         }
 
         // Fall back to cwd correlation only when a single session owns the cwd.
         if let Some(cwd) = effective_cwd(probe) {
             if let Some(record) = correlate_claude_record(&cwd, claude_cwds, claude_records) {
-                let activity = escalate_claude_activity(record.activity, probe);
-                return (claude_json_status(probe, &activity, now), working_stamp(&activity, now));
+                let activity = escalate_claude_activity(
+                    record.activity,
+                    probe,
+                    probe.cleaned_scrollback.as_deref(),
+                );
+                return (
+                    claude_json_status(probe, &activity, now),
+                    working_stamp(&activity, now),
+                );
             }
             // Ambiguous or unmatched cwd falls through to per-terminal scrollback,
             // which naturally reads each terminal's own working state.
@@ -465,6 +532,7 @@ fn status_from_probe(
         &probe.registration.terminal_id,
         probe.kind.clone(),
         probe.probe.as_ref(),
+        probe.cleaned_scrollback.as_deref(),
         now,
         prev_working_at,
     );
@@ -510,36 +578,56 @@ fn working_stamp(activity: &AgentActivity, now: u64) -> Option<u64> {
 /// `claude agents --json` reports `busy` even while the session is blocked on an
 /// approval/input prompt. Escalate to `waiting` (the strongest attention state)
 /// when the terminal's bottom rows show such a prompt.
-fn escalate_claude_activity(activity: AgentActivity, probe: &StatusProbe) -> AgentActivity {
-    if activity == AgentActivity::Working && probe_scrollback_waiting(probe) {
+fn escalate_claude_activity(
+    activity: AgentActivity,
+    probe: &StatusProbe,
+    cleaned: Option<&str>,
+) -> AgentActivity {
+    if activity == AgentActivity::Working && probe_scrollback_waiting(probe, cleaned) {
         AgentActivity::Waiting
     } else {
         activity
     }
 }
 
-fn probe_scrollback_waiting(probe: &StatusProbe) -> bool {
-    probe
-        .probe
-        .as_ref()
-        .map(|pty_probe| {
-            let clean = strip_ansi(&pty_probe.scrollback).to_ascii_lowercase();
-            let tail = recent_scrollback_lines(&clean, WAITING_TAIL_LINES);
-            contains_any(&tail, WAITING_MARKERS)
-        })
-        .unwrap_or(false)
+fn probe_scrollback_waiting(probe: &StatusProbe, cleaned: Option<&str>) -> bool {
+    // Reuse the scrollback stripped during kind detection if present; only strip
+    // here when this path needs it and nothing else already has.
+    let owned;
+    let clean: &str = match cleaned {
+        Some(c) => c,
+        None => match probe.probe.as_ref() {
+            Some(pty_probe) => {
+                owned = strip_ansi(&pty_probe.scrollback).to_ascii_lowercase();
+                &owned
+            }
+            None => return false,
+        },
+    };
+    let tail = recent_scrollback_lines(clean, WAITING_TAIL_LINES);
+    contains_any(&tail, WAITING_MARKERS)
 }
 
 fn fallback_scrollback_status(
     terminal_id: &str,
     kind: AgentKind,
     probe: Option<&PtyAgentProbe>,
+    cleaned: Option<&str>,
     now: u64,
     prev_working_at: Option<u64>,
 ) -> (AgentStatus, Option<u64>) {
     let verdict = probe
         .map(|probe| {
-            classify_scrollback(&probe.scrollback, probe.last_output_at, now, prev_working_at)
+            // Reuse the kind-detection strip when present; else strip once here.
+            let owned;
+            let clean: &str = match cleaned {
+                Some(c) => c,
+                None => {
+                    owned = strip_ansi(&probe.scrollback).to_ascii_lowercase();
+                    &owned
+                }
+            };
+            classify_scrollback_clean(clean, probe.last_output_at, now, prev_working_at)
         })
         .unwrap_or(ScrollbackVerdict {
             activity: AgentActivity::Unknown,
@@ -856,24 +944,29 @@ fn normalize_path_text(path: &str) -> Option<String> {
 
 /// Uses `cmd_cache` so we only spawn `/bin/ps`
 /// on the first observation of a given pid, not every poll tick.
+/// Returns the detected kind and, when the scrollback fallback ran, the
+/// stripped+lowercased scrollback so the caller can reuse it for activity
+/// classification (avoids stripping the same ~100KB buffer twice per tick).
 fn detect_agent_kind_cached(
     probe: Option<&PtyAgentProbe>,
     cmd_cache: &mut ProcessCommandCache,
-) -> AgentKind {
+) -> (AgentKind, Option<String>) {
     let Some(probe) = probe else {
-        return AgentKind::Unknown;
+        return (AgentKind::Unknown, None);
     };
 
     if let Some(pid) = probe.foreground_process_group {
         if let Some(command) = cmd_cache.get(pid) {
             let kind = kind_from_process_command(command);
             if kind != AgentKind::Unknown {
-                return kind;
+                return (kind, None);
             }
         }
     }
 
-    kind_from_scrollback(&probe.scrollback)
+    let cleaned = strip_ansi(&probe.scrollback).to_ascii_lowercase();
+    let kind = kind_from_scrollback(&cleaned);
+    (kind, Some(cleaned))
 }
 
 #[cfg(target_os = "macos")]
@@ -948,21 +1041,25 @@ fn kind_from_binary_name(name: &str) -> AgentKind {
     }
 }
 
-fn kind_from_scrollback(scrollback: &str) -> AgentKind {
-    let text = strip_ansi(scrollback).to_ascii_lowercase();
-    if contains_any(&text, &["claude code", "welcome to claude", "claude>"]) {
+/// `text` must already be `strip_ansi(scrollback).to_ascii_lowercase()` —
+/// detect_agent_kind_cached strips once and shares it with the classifier.
+fn kind_from_scrollback(text: &str) -> AgentKind {
+    if contains_any(text, &["claude code", "welcome to claude", "claude>"]) {
         AgentKind::Claude
     } else if text.contains("openai codex")
         || (text.contains("codex") && text.contains("esc to interrupt"))
     {
         AgentKind::Codex
-    } else if contains_any(&text, &["aider chat", "aider v", "aider is"]) {
+    } else if contains_any(text, &["aider chat", "aider v", "aider is"]) {
         AgentKind::Aider
     } else {
         AgentKind::Unknown
     }
 }
 
+/// Test/raw entry point: strips+lowercases then delegates. Production passes the
+/// already-cleaned scrollback to `classify_scrollback_clean` directly.
+#[cfg(test)]
 fn classify_scrollback(
     scrollback: &str,
     last_output_at: Option<u64>,
@@ -970,7 +1067,16 @@ fn classify_scrollback(
     prev_working_at: Option<u64>,
 ) -> ScrollbackVerdict {
     let clean = strip_ansi(scrollback).to_ascii_lowercase();
-    let recent = recent_scrollback_lines(&clean, RECENT_SCROLLBACK_LINES);
+    classify_scrollback_clean(&clean, last_output_at, now, prev_working_at)
+}
+
+fn classify_scrollback_clean(
+    clean: &str,
+    last_output_at: Option<u64>,
+    now: u64,
+    prev_working_at: Option<u64>,
+) -> ScrollbackVerdict {
+    let recent = recent_scrollback_lines(clean, RECENT_SCROLLBACK_LINES);
     if recent.trim().is_empty() {
         return ScrollbackVerdict {
             activity: AgentActivity::Unknown,
@@ -983,7 +1089,7 @@ fn classify_scrollback(
 
     // Explicit approval/input prompts win — only consulted at the very bottom of
     // the buffer where such prompts render, so stale history never misfires.
-    let waiting_tail = recent_scrollback_lines(&clean, WAITING_TAIL_LINES);
+    let waiting_tail = recent_scrollback_lines(clean, WAITING_TAIL_LINES);
     if contains_any(&waiting_tail, WAITING_MARKERS) {
         return ScrollbackVerdict {
             activity: AgentActivity::Waiting,
@@ -1214,12 +1320,18 @@ mod tests {
         let now = 40_000;
 
         assert_eq!(
-            classify_scrollback("thinking...\nesc to interrupt", Some(now - 500), now, None).activity,
+            classify_scrollback("thinking...\nesc to interrupt", Some(now - 500), now, None)
+                .activity,
             AgentActivity::Working,
         );
         assert_eq!(
-            classify_scrollback("Allow command to run?\nApprove with y/n", Some(now - 500), now, None)
-                .activity,
+            classify_scrollback(
+                "Allow command to run?\nApprove with y/n",
+                Some(now - 500),
+                now,
+                None
+            )
+            .activity,
             AgentActivity::Waiting,
         );
         assert_eq!(
@@ -1248,7 +1360,8 @@ mod tests {
         let now = 12_000;
 
         assert_eq!(
-            classify_scrollback("cargo check\nCompiling crate", Some(now - 500), now, None).activity,
+            classify_scrollback("cargo check\nCompiling crate", Some(now - 500), now, None)
+                .activity,
             AgentActivity::Unknown,
         );
     }
@@ -1283,8 +1396,12 @@ mod tests {
         let now = 100_000;
         // Quiet for 30s and last working stamp is 30s old → past the grace window,
         // sitting on a prompt → idle.
-        let verdict =
-            classify_scrollback("done\n~/project $ ", Some(now - 30_000), now, Some(now - 30_000));
+        let verdict = classify_scrollback(
+            "done\n~/project $ ",
+            Some(now - 30_000),
+            now,
+            Some(now - 30_000),
+        );
         assert_eq!(verdict.activity, AgentActivity::Idle);
         assert_eq!(verdict.last_working_at, None);
     }
@@ -1331,6 +1448,7 @@ mod tests {
                 }),
                 kind: AgentKind::Claude,
                 process_cwd: None,
+                cleaned_scrollback: None,
             }
         }
 
@@ -1339,6 +1457,7 @@ mod tests {
             escalate_claude_activity(
                 AgentActivity::Working,
                 &probe_with("Editing src/lib.rs\nDo you want to proceed?"),
+                None,
             ),
             AgentActivity::Waiting,
         );
@@ -1347,6 +1466,7 @@ mod tests {
             escalate_claude_activity(
                 AgentActivity::Working,
                 &probe_with("git push\nfatal: Permission denied (publickey)"),
+                None,
             ),
             AgentActivity::Working,
         );
@@ -1354,6 +1474,7 @@ mod tests {
             escalate_claude_activity(
                 AgentActivity::Working,
                 &probe_with("CI: build approved\nrunning tests"),
+                None,
             ),
             AgentActivity::Working,
         );
@@ -1412,6 +1533,7 @@ mod tests {
             probe: None,
             kind: AgentKind::Claude,
             process_cwd: None,
+            cleaned_scrollback: None,
         };
         let records = vec![
             ClaudeAgentRecord {

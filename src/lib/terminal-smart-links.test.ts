@@ -3,6 +3,7 @@ import {
   findTerminalDiagnosticLink,
   findTerminalFileContext,
   findTerminalSmartLinks,
+  looksLikeTerminalDiagnostic,
   mapTerminalLinkRange,
   resolveTerminalFilePath,
 } from "@/lib/terminal-smart-links";
@@ -209,6 +210,19 @@ describe("ESLint stylish helpers", () => {
       startIndex: 2,
       endIndex: 7,
     });
+  });
+
+  it("gates the backscan: only diagnostic-shaped rows look like diagnostics", () => {
+    // Rows that need the preceding file-path context scan.
+    expect(looksLikeTerminalDiagnostic("  42:13  error  Unexpected any")).toBe(true);
+    expect(looksLikeTerminalDiagnostic("   1:1  warning  Missing semicolon")).toBe(true);
+    // Ordinary output must NOT trigger the scrollback walk.
+    expect(looksLikeTerminalDiagnostic("Running build…")).toBe(false);
+    expect(looksLikeTerminalDiagnostic("const x = foo();")).toBe(false);
+    expect(looksLikeTerminalDiagnostic("/Users/dominik/Korum/src/App.tsx")).toBe(false);
+    // A bare diagnostic row still matches even without a context path resolved
+    // (the link is only produced once a context path is found).
+    expect(looksLikeTerminalDiagnostic("  7:5 error")).toBe(true);
   });
 });
 

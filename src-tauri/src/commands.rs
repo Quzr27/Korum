@@ -4,7 +4,7 @@ use crate::pty::PtyState;
 use crate::quit_guard::QuitGuardState;
 use serde::Serialize;
 use std::process::Command;
-use tauri::ipc::Channel;
+use tauri::ipc::{Channel, Response};
 use tauri::State;
 
 #[derive(Serialize)]
@@ -26,7 +26,8 @@ pub fn create_terminal(
 pub fn attach_terminal(
     state: State<'_, PtyState>,
     id: String,
-    output_channel: Channel<Vec<u8>>,
+    // Raw byte body (ArrayBuffer on the JS side) — see TerminalStream.channel.
+    output_channel: Channel<Response>,
 ) -> Result<(), String> {
     state.attach(&id, output_channel)
 }
@@ -34,6 +35,18 @@ pub fn attach_terminal(
 #[tauri::command]
 pub fn detach_terminal(state: State<'_, PtyState>, id: String) -> Result<(), String> {
     state.detach(&id)
+}
+
+/// Flow control: frontend pauses the PTY read thread when its xterm parse
+/// buffer is backed up, and resumes once drained (see useXtermSession).
+#[tauri::command]
+pub fn pause_terminal_read(state: State<'_, PtyState>, id: String) -> Result<(), String> {
+    state.pause_read(&id)
+}
+
+#[tauri::command]
+pub fn resume_terminal_read(state: State<'_, PtyState>, id: String) -> Result<(), String> {
+    state.resume_read(&id)
 }
 
 #[tauri::command]
