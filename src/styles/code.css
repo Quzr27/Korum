@@ -11,14 +11,31 @@
   background: color-mix(in oklch, var(--ws-accent, #4493f8) 38%, transparent);
 }
 
+/* Render the code body as block/flex rows instead of a real <table>. CodeWindow
+   virtualizes rows in React, and fixed-height rows keep scroll math cheap even
+   when a large file such as App.tsx is open on the canvas. */
+.code-viewer table,
+.code-viewer tbody {
+  display: block;
+  min-width: 100%;
+}
+
 .code-line {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
   height: 1.5em;
+  min-height: 1.5em;
 }
 
 .code-gutter {
   position: sticky;
   left: 0;
-  min-width: 40px;
+  /* Width is derived from the file's line-number digit count (set as
+     --code-gutter-ch on .code-viewer) so every gutter is identical and the
+     code column stays aligned — flex items would otherwise size per-row. */
+  flex: none;
+  width: calc(var(--code-gutter-ch, 3) * 1ch + 20px);
   padding: 0 8px 0 12px;
   text-align: right;
   color: inherit;
@@ -31,9 +48,28 @@
 }
 
 .code-cell {
+  flex: 1 0 auto;
+  min-width: 0;
   padding: 0 12px 0 4px;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre;
+  word-break: normal;
+}
+
+.code-line-pending .code-cell {
+  color: color-mix(in oklch, currentColor 72%, transparent);
+}
+
+.code-virtual-spacer {
+  display: block;
+  min-height: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.code-virtual-spacer > td {
+  display: block;
+  height: 100%;
+  padding: 0;
 }
 
 .code-line-target {
@@ -48,14 +84,52 @@
   opacity: 1;
 }
 
+/* ── Low zoom code preview ── */
+.code-preview {
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+  opacity: 0.9;
+  padding-top: 4px;
+}
+
+.code-preview-line {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+  height: 1.5em;
+  min-height: 1.5em;
+  overflow: hidden;
+}
+
+.code-preview-gutter {
+  flex: none;
+  width: calc(var(--code-gutter-ch, 3) * 1ch + 20px);
+  padding: 0 8px 0 12px;
+  text-align: right;
+  opacity: 0.26;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-preview-cell {
+  flex: 1 0 auto;
+  min-width: 0;
+  padding: 0 12px 0 4px;
+  white-space: pre;
+  word-break: normal;
+  opacity: 0.72;
+}
+
 /* ── Diff mode ── */
 .diff-gutter-old {
-  min-width: 32px;
+  flex: none;
+  width: calc(var(--code-gutter-ch, 3) * 1ch + 12px);
   padding: 0 4px 0 8px;
 }
 
 .diff-gutter-new {
-  min-width: 32px;
+  flex: none;
+  width: calc(var(--code-gutter-ch, 3) * 1ch + 8px);
   padding: 0 4px;
 }
 

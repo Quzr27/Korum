@@ -20,6 +20,9 @@ export default defineConfig({
     },
   },
   clearScreen: false,
+  worker: {
+    format: "es",
+  },
   server: {
     port: 1420,
     strictPort: true,

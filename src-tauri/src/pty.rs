@@ -2,9 +2,9 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::ipc::Channel;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tauri::ipc::{Channel, Response};
 
 /// Max buffered PTY output per terminal (~100KB ≈ 50 screens of text)
 const MAX_BUFFER_SIZE: usize = 102_400;
@@ -16,7 +16,13 @@ const MAX_BUFFER_SIZE: usize = 102_400;
 const READ_BUF_SIZE: usize = 32_768;
 
 struct TerminalStream {
-    channel: Option<Channel<Vec<u8>>>,
+    // Raw byte body: a `Channel<Vec<u8>>` would serialize each chunk as a JSON
+    // number-array (the blanket `impl<T: Serialize> IpcResponse`), so a 32 KB
+    // read becomes ~100 KB of ASCII that the webview must `JSON.parse` and copy.
+    // Sending `Response` (→ `InvokeResponseBody::Raw`) delivers a binary
+    // ArrayBuffer instead: no JSON encode in Rust, no parse in JS, zero-copy
+    // `new Uint8Array(buffer)` on the frontend.
+    channel: Option<Channel<Response>>,
     replay: VecDeque<u8>,
     buffer: VecDeque<u8>,
     last_output_at: Option<u64>,
@@ -28,6 +34,13 @@ struct TerminalInstance {
     killer: Box<dyn ChildKiller + Send + Sync>,
     stream: Arc<Mutex<TerminalStream>>,
     cwd: Option<PathBuf>,
+    /// Flow-control gate for the read thread. When `true`, the reader stops
+    /// pulling from the PTY so the kernel buffer fills and the child process
+    /// blocks (natural backpressure). The frontend sets this when its xterm
+    /// parse buffer is backed up (see pause_read / resume_read) and clears it
+    /// as xterm drains, preventing unbounded IPC queue / memory growth on
+    /// floods (`yes`, huge `cat`, many busy agents).
+    read_pause: Arc<(Mutex<bool>, Condvar)>,
 }
 
 struct PtyStateInner {
@@ -61,9 +74,31 @@ fn extend_buffer(buffer: &mut VecDeque<u8>, data: &[u8]) {
     }
 }
 
+fn decode_replay_tail(replay: &VecDeque<u8>, max_bytes: usize) -> String {
+    if max_bytes == 0 || replay.is_empty() {
+        return String::new();
+    }
+
+    let bytes_to_take = replay.len().min(max_bytes);
+    let skip = replay.len() - bytes_to_take;
+    let (front, back) = replay.as_slices();
+
+    if skip < front.len() {
+        let mut text = String::from_utf8_lossy(&front[skip..]).into_owned();
+        if !back.is_empty() {
+            text.push_str(&String::from_utf8_lossy(back));
+        }
+        text
+    } else {
+        let back_skip = skip - front.len();
+        String::from_utf8_lossy(&back[back_skip..]).into_owned()
+    }
+}
+
 /// Drain `batch` into the stream (replay + live channel / fallback buffer).
-/// SAFETY: Channel::send() is fire-and-forget in Tauri 2
-/// (webview.eval() does not block), so holding the stream mutex during
+/// SAFETY: Channel::send() is fire-and-forget in Tauri 2 (it `webview.eval()`s
+/// a callback, or for larger Raw payloads queues the bytes and evals a fetch —
+/// neither blocks on webview processing), so holding the stream mutex during
 /// send is safe and cannot deadlock.
 fn flush_batch(stream_ref: &Arc<Mutex<TerminalStream>>, batch: &mut Vec<u8>) {
     if batch.is_empty() {
@@ -78,8 +113,11 @@ fn flush_batch(stream_ref: &Arc<Mutex<TerminalStream>>, batch: &mut Vec<u8>) {
     if let Some(ch) = stream.channel.as_ref() {
         // take ownership: either the send succeeds or we need the data for
         // the fallback buffer below, so swap out of batch unconditionally.
+        // `Response` is not `Clone`, so clone the bytes (cheap ≤32 KB memcpy)
+        // and reconstruct the Response per send; `payload` survives for the
+        // rare send-error fallback into the reattach buffer.
         let payload = std::mem::take(batch);
-        if ch.send(payload.clone()).is_err() {
+        if ch.send(Response::new(payload.clone())).is_err() {
             // Channel closed — fall back to buffering
             stream.channel = None;
             extend_buffer(&mut stream.buffer, &payload);
@@ -145,7 +183,10 @@ impl PtyState {
             last_output_at: None,
         }));
 
+        let read_pause = Arc::new((Mutex::new(false), Condvar::new()));
+
         let stream_ref = Arc::clone(&stream);
+        let pause_pair = Arc::clone(&read_pause);
         std::thread::spawn(move || {
             // One blocking read per iteration — the kernel returns whatever is
             // queued (up to READ_BUF_SIZE), so bursts arrive in large chunks
@@ -154,6 +195,21 @@ impl PtyState {
             // full 32 KB allocation.
             let mut buf = [0u8; READ_BUF_SIZE];
             loop {
+                // Flow control: block here while the frontend has paused us
+                // because its xterm parse buffer is backed up. Not reading lets
+                // the kernel PTY buffer fill so the child blocks. `wait_timeout`
+                // is only a missed-notify safety net — we keep waiting until the
+                // flag actually clears, so a flood can never slip through.
+                {
+                    let (lock, cvar) = &*pause_pair;
+                    let Ok(mut paused) = lock.lock() else { break };
+                    while *paused {
+                        match cvar.wait_timeout(paused, Duration::from_millis(200)) {
+                            Ok((guard, _)) => paused = guard,
+                            Err(_) => return,
+                        }
+                    }
+                }
                 match reader.read(&mut buf) {
                     Ok(0) => break, // EOF
                     Ok(n) => {
@@ -171,6 +227,7 @@ impl PtyState {
             killer,
             stream,
             cwd: cwd_path,
+            read_pause,
         };
 
         self.inner
@@ -181,7 +238,7 @@ impl PtyState {
         Ok(id)
     }
 
-    pub fn attach(&self, id: &str, channel: Channel<Vec<u8>>) -> Result<(), String> {
+    pub fn attach(&self, id: &str, channel: Channel<Response>) -> Result<(), String> {
         // Clone the stream Arc, then release the outer terminals lock before
         // acquiring the inner stream lock. This prevents nested-lock risk.
         let stream_arc = {
@@ -206,15 +263,57 @@ impl PtyState {
 
         // Replay buffered output to the newly attached channel
         if !buffered.is_empty() {
-            if let Some(ch) = stream.channel.as_ref() {
-                if ch.send(buffered).is_err() {
-                    // Channel broken — read thread will also fail and fall back to buffering
-                    stream.channel = None;
-                }
+            let send_failed = match stream.channel.as_ref() {
+                Some(ch) => ch.send(Response::new(buffered.clone())).is_err(),
+                None => false,
+            };
+            if send_failed {
+                // Channel broke before the replay landed — re-buffer it so the
+                // next attach replays it instead of losing it (mirror flush_batch).
+                stream.channel = None;
+                extend_buffer(&mut stream.buffer, &buffered);
             }
         }
+        drop(stream);
 
+        // A fresh attach starts unpaused — clear any flow-control pause left by
+        // a prior session so the read thread streams again.
+        self.set_read_paused(id, false);
         Ok(())
+    }
+
+    /// Pause the read thread (frontend flow control: its xterm parse buffer is
+    /// backed up). The kernel PTY buffer then fills and the child blocks.
+    pub fn pause_read(&self, id: &str) -> Result<(), String> {
+        self.set_read_paused(id, true);
+        Ok(())
+    }
+
+    /// Resume a paused read thread once the frontend has drained.
+    pub fn resume_read(&self, id: &str) -> Result<(), String> {
+        self.set_read_paused(id, false);
+        Ok(())
+    }
+
+    fn set_read_paused(&self, id: &str, paused: bool) {
+        // Clone the pause Arc out under the terminals lock, then release it
+        // before touching the pause mutex (terminals → pause lock order only).
+        let pair = {
+            let Ok(terminals) = self.inner.terminals.lock() else {
+                return;
+            };
+            let Some(instance) = terminals.get(id) else {
+                return;
+            };
+            Arc::clone(&instance.read_pause)
+        };
+        let (lock, cvar) = &*pair;
+        if let Ok(mut guard) = lock.lock() {
+            *guard = paused;
+        }
+        if !paused {
+            cvar.notify_all();
+        }
     }
 
     pub fn detach(&self, id: &str) -> Result<(), String> {
@@ -227,12 +326,17 @@ impl PtyState {
             Arc::clone(&terminals.get(id).ok_or("Terminal not found")?.stream)
         };
 
-        let mut stream = stream_arc
-            .lock()
-            .map_err(|e| format!("lock poisoned: {e}"))?;
+        {
+            let mut stream = stream_arc
+                .lock()
+                .map_err(|e| format!("lock poisoned: {e}"))?;
+            // Remove channel — read thread switches to buffering
+            stream.channel = None;
+        }
 
-        // Remove channel — read thread switches to buffering
-        stream.channel = None;
+        // A detached terminal keeps buffering recent output for replay/preview,
+        // so it must not stay paused by stale frontend flow control.
+        self.set_read_paused(id, false);
         Ok(())
     }
 
@@ -281,6 +385,15 @@ impl PtyState {
             .map_err(|e| format!("lock poisoned: {e}"))?
             .remove(id);
         if let Some(mut inst) = instance {
+            // Wake a paused reader so it observes the kill (EOF) and exits
+            // instead of parking on the flow-control condvar.
+            {
+                let (lock, cvar) = &*inst.read_pause;
+                if let Ok(mut paused) = lock.lock() {
+                    *paused = false;
+                }
+                cvar.notify_all();
+            }
             let _ = inst.killer.kill();
         }
         Ok(())
@@ -318,7 +431,11 @@ impl PtyState {
         Ok(preview_tail(&stripped, max_lines))
     }
 
-    pub fn agent_probe(&self, id: &str) -> Result<PtyAgentProbe, String> {
+    pub fn agent_probe(
+        &self,
+        id: &str,
+        max_scrollback_bytes: usize,
+    ) -> Result<PtyAgentProbe, String> {
         let (master_arc, stream_arc, cwd) = {
             let terminals = self
                 .inner
@@ -344,17 +461,10 @@ impl PtyState {
             let stream = stream_arc
                 .lock()
                 .map_err(|e| format!("lock poisoned: {e}"))?;
-            // Use as_slices() to avoid a full VecDeque→Vec copy (~100 KB per
-            // terminal every 2 s). The deque may be split across two slices;
-            // decode each and concatenate only when the second slice is non-empty.
-            let (front, back) = stream.replay.as_slices();
-            let scrollback = if back.is_empty() {
-                String::from_utf8_lossy(front).into_owned()
-            } else {
-                let mut s = String::from_utf8_lossy(front).into_owned();
-                s.push_str(&String::from_utf8_lossy(back));
-                s
-            };
+            // Agent status only needs recent bottom-of-buffer markers. Decode a
+            // bounded tail instead of materializing the full ~100 KB replay every
+            // poll tick for every terminal.
+            let scrollback = decode_replay_tail(&stream.replay, max_scrollback_bytes);
             (scrollback, stream.last_output_at)
         };
 
@@ -515,6 +625,33 @@ mod tests {
         assert_eq!(content, b"first second third");
     }
 
+    #[test]
+    fn decode_replay_tail_respects_byte_limit() {
+        let replay = VecDeque::from(b"old output that should not be decoded\nrecent tail".to_vec());
+
+        assert_eq!(decode_replay_tail(&replay, 0), "");
+        assert_eq!(
+            decode_replay_tail(&replay, b"recent tail".len()),
+            "recent tail"
+        );
+    }
+
+    #[test]
+    fn decode_replay_tail_handles_split_vecdeque() {
+        let mut replay = VecDeque::with_capacity(16);
+        replay.extend(b"abcdefgh");
+        for _ in 0..6 {
+            replay.pop_front();
+        }
+        replay.extend(b"ijklmnopqrst");
+        assert!(
+            !replay.as_slices().1.is_empty(),
+            "test setup should force a split VecDeque",
+        );
+
+        assert_eq!(decode_replay_tail(&replay, 7), "nopqrst");
+    }
+
     // ── flush_batch / coalescing helpers ────────────────────────────────────
 
     #[test]
@@ -529,8 +666,14 @@ mod tests {
         flush_batch(&stream, &mut batch);
         assert!(batch.is_empty(), "batch should be cleared after flush");
         let s = stream.lock().unwrap();
-        assert_eq!(s.replay.iter().copied().collect::<Vec<_>>(), b"hello coalesced");
-        assert_eq!(s.buffer.iter().copied().collect::<Vec<_>>(), b"hello coalesced");
+        assert_eq!(
+            s.replay.iter().copied().collect::<Vec<_>>(),
+            b"hello coalesced"
+        );
+        assert_eq!(
+            s.buffer.iter().copied().collect::<Vec<_>>(),
+            b"hello coalesced"
+        );
         assert!(s.last_output_at.is_some());
     }
 

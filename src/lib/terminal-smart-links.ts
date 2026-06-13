@@ -218,6 +218,16 @@ export function findTerminalFileContext(line: string): TerminalFileContext | nul
   };
 }
 
+/**
+ * Cheap predicate: does this line look like an ESLint `line:col error/warning`
+ * diagnostic row? Used to gate the (up to 24-line) backward file-context scan
+ * so ordinary hovers don't walk the scrollback. The pattern has no `g` flag,
+ * so `test()` is stateless.
+ */
+export function looksLikeTerminalDiagnostic(line: string): boolean {
+  return ESLINT_DIAGNOSTIC_PATTERN.test(line);
+}
+
 export function findTerminalDiagnosticLink(line: string, path: string): TerminalFileLink | null {
   const match = ESLINT_DIAGNOSTIC_PATTERN.exec(line);
   if (!match) return null;

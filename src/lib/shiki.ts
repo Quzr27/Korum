@@ -1,11 +1,76 @@
 import { createHighlighter, type BundledLanguage, type BundledTheme, type Highlighter, type ThemedToken } from "shiki";
 import { createTokenLRU } from "./token-lru";
 
+type TokenizeWorkerResponse =
+  | { id: number; ok: true; tokens: ThemedToken[][] }
+  | { id: number; ok: false; error: string };
+
 let highlighterPromise: Promise<Highlighter> | null = null;
 const loadedLangs = new Set<string>();
 const loadingLangs = new Map<string, Promise<boolean>>();
 const loadedThemes = new Set<string>();
 const loadingThemes = new Map<string, Promise<boolean>>();
+let tokenWorker: Worker | null = null;
+let tokenWorkerFailed = false;
+let nextWorkerRequestId = 1;
+const workerRequests = new Map<number, {
+  resolve: (tokens: ThemedToken[][]) => void;
+  reject: (err: Error) => void;
+}>();
+
+function rejectAllWorkerRequests(err: Error): void {
+  for (const { reject } of workerRequests.values()) reject(err);
+  workerRequests.clear();
+}
+
+function getTokenWorker(): Worker | null {
+  if (tokenWorkerFailed || typeof Worker === "undefined") return null;
+  if (tokenWorker) return tokenWorker;
+
+  try {
+    tokenWorker = new Worker(new URL("./shiki-worker.ts", import.meta.url), {
+      type: "module",
+      name: "korum-shiki-tokenizer",
+    });
+  } catch {
+    tokenWorkerFailed = true;
+    return null;
+  }
+
+  tokenWorker.addEventListener("message", (event: MessageEvent<TokenizeWorkerResponse>) => {
+    const response = event.data;
+    const pending = workerRequests.get(response.id);
+    if (!pending) return;
+
+    workerRequests.delete(response.id);
+    if (response.ok) pending.resolve(response.tokens);
+    else pending.reject(new Error(response.error));
+  });
+
+  tokenWorker.addEventListener("error", (event) => {
+    tokenWorkerFailed = true;
+    tokenWorker?.terminate();
+    tokenWorker = null;
+    rejectAllWorkerRequests(new Error(event.message || "Shiki worker failed"));
+  });
+
+  return tokenWorker;
+}
+
+function tokenizeWithWorker(
+  code: string,
+  lang: string,
+  theme: string,
+): Promise<ThemedToken[][]> | null {
+  const worker = getTokenWorker();
+  if (!worker) return null;
+
+  const id = nextWorkerRequestId++;
+  return new Promise((resolve, reject) => {
+    workerRequests.set(id, { resolve, reject });
+    worker.postMessage({ id, code, lang, theme });
+  });
+}
 
 function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
@@ -70,6 +135,16 @@ async function tokenizeUncached(
   lang: string,
   theme: string,
 ): Promise<ThemedToken[][]> {
+  const workerTokenization = tokenizeWithWorker(code, lang, theme);
+  if (workerTokenization) {
+    try {
+      return await workerTokenization;
+    } catch {
+      // If the worker is unavailable or crashes, keep code windows functional.
+      tokenWorkerFailed = true;
+    }
+  }
+
   const hl = await getHighlighter();
 
   const loaded = await ensureLanguage(hl, lang);
@@ -115,4 +190,13 @@ export function tokenizeCode(
   }
 
   return pending;
+}
+
+export function tokenizeCodeLines(
+  lines: readonly string[],
+  lang: string,
+  theme: string = "github-dark",
+): Promise<ThemedToken[][]> {
+  if (lines.length === 0) return Promise.resolve([]);
+  return tokenizeCode(lines.join("\n"), lang, theme);
 }

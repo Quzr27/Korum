@@ -31,6 +31,7 @@ import {
   findTerminalDiagnosticLink,
   findTerminalFileContext,
   findTerminalSmartLinks,
+  looksLikeTerminalDiagnostic,
   mapTerminalLinkRange,
   resolveTerminalFilePath,
   type TerminalLinkSegment,
@@ -47,6 +48,12 @@ import type { PasteRequest } from "@/types";
 const SNAPSHOT_SCROLLBACK_ROWS = 120;
 const LIVE_WRITE_REPAIR_IDLE_DELAY_MS = 180;
 const LIVE_WRITE_REPAIR_MAX_DELAY_MS = 1000;
+// Flow control: when xterm's un-parsed write backlog exceeds the high-water
+// mark we pause the Rust PTY read thread; we resume once it drains below the
+// low-water mark. Sized so ordinary output never trips them — only sustained
+// floods (`yes`, huge `cat`, many busy agents) do — bounding IPC/memory growth.
+const LIVE_WRITE_PAUSE_HIGH_WATER = 2_000_000;
+const LIVE_WRITE_PAUSE_LOW_WATER = 400_000;
 const ESLINT_CONTEXT_SCAN_LINES = 24;
 const TERMINAL_FONT_LOAD_TIMEOUT_MS = 1500;
 
@@ -252,6 +259,15 @@ function findRecentTerminalFileContext(term: Terminal, beforeBufferLineNumber: n
   return null;
 }
 
+/** A detached terminal awaiting a staggered dispose. `capture` runs the
+ *  deferred scrollback snapshot (idempotent) and is invoked by the dispose
+ *  timer or by `flushPendingDispose` on a fast reattach. */
+export interface PendingDispose {
+  term: Terminal;
+  timer: number;
+  capture?: () => string | null;
+}
+
 export interface UseXtermSessionOptions {
   id: string;
   isPtyReady: boolean;
@@ -264,11 +280,12 @@ export interface UseXtermSessionOptions {
   ptyIdRef: React.MutableRefObject<string | null>;
   mountedRef: React.MutableRefObject<boolean>;
   termRef: React.RefObject<HTMLDivElement | null>;
-  pendingDisposeRef: React.MutableRefObject<{ term: Terminal; timer: number } | null>;
+  pendingDisposeRef: React.MutableRefObject<PendingDispose | null>;
   windowWidth: number;
   windowHeight: number;
   isActive: boolean;
-  flushPendingDispose: () => void;
+  /** Disposes the pending term, capturing its deferred snapshot and returning it. */
+  flushPendingDispose: () => string | null;
   onSnapshotCaptured: (windowId: string, snapshot: string | null) => void;
   onPasteRequest: (request: PasteRequest) => void;
   workspaceRoot?: string;
@@ -315,6 +332,13 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
   const [isSessionReady, setIsSessionReady] = useState(false);
   const workspaceRootRef = useRef(workspaceRoot);
   const onOpenFileLinkRef = useRef(onOpenFileLink);
+  // Track the settings/size already applied to the live terminal. Effect B
+  // creates each terminal pre-configured at the current settings + size and
+  // fits it once, so the settings and resize effects skip their redundant
+  // mount run (a fit reads computed styles — expensive ×N during attach storms)
+  // and only re-fit on an actual change.
+  const lastAppliedSettingsRef = useRef({ terminalFont, terminalFontSize, terminalTheme });
+  const lastFitSizeRef = useRef({ windowWidth, windowHeight });
 
   const { register: registerVisibility, unregister: unregisterVisibility } = useVisibility();
 
@@ -336,7 +360,10 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     const ptyId = ptyIdRef.current;
     if (!isPtyReady || !shouldAttach || !ptyId || !termRef.current) return;
 
-    flushPendingDispose();
+    // Disposing the previous term also captures its (deferred) snapshot. On a
+    // fast reattach the snapshot prop may not have round-tripped through App
+    // state yet, so prefer the just-flushed value to avoid losing scrollback.
+    const flushedSnapshot = flushPendingDispose();
     termRef.current.replaceChildren();
     onGhosted(false);
 
@@ -365,6 +392,12 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     term.loadAddon(serializeAddon);
     termInstanceRef.current = term;
     fitAddonRef.current = fitAddon;
+    // This fresh terminal is created + fit with the current settings/size, so
+    // sync the skip-guards to match. Without this, a settings/size change that
+    // happened while the terminal was detached (and then changed back) would be
+    // seen as "unchanged" by the settings/resize effects and never re-applied.
+    lastAppliedSettingsRef.current = { terminalFont, terminalFontSize, terminalTheme };
+    lastFitSizeRef.current = { windowWidth, windowHeight };
 
     // Open terminal synchronously (container is in DOM from React commit)
     term.open(termRef.current!);
@@ -380,13 +413,16 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
         const links: ILink[] = [];
         const smartLinks = findTerminalSmartLinks(logicalLine.text);
         const firstSegment = logicalLine.segments[0];
-        const contextPath = firstSegment
-          ? findRecentTerminalFileContext(term, firstSegment.bufferLineNumber)
-          : null;
-        const diagnosticLink = contextPath
-          ? findTerminalDiagnosticLink(logicalLine.text, contextPath)
-          : null;
-        if (diagnosticLink) smartLinks.push(diagnosticLink);
+        // Only walk the scrollback for a preceding file path when this line
+        // actually looks like a diagnostic row that needs one — otherwise every
+        // hover scans up to 24 logical lines for nothing.
+        if (firstSegment && looksLikeTerminalDiagnostic(logicalLine.text)) {
+          const contextPath = findRecentTerminalFileContext(term, firstSegment.bufferLineNumber);
+          const diagnosticLink = contextPath
+            ? findTerminalDiagnosticLink(logicalLine.text, contextPath)
+            : null;
+          if (diagnosticLink) smartLinks.push(diagnosticLink);
+        }
 
         for (const smartLink of smartLinks) {
           if (smartLink.kind === "file" && !resolveTerminalFilePath(smartLink.path, workspaceRootRef.current)) {
@@ -427,6 +463,9 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     let alive = true;
     let attached = false;
     let hasLiveData = false;
+    // Flow control: bytes written to xterm but not yet parsed (callback pending).
+    let pendingParseBytes = 0;
+    let readPaused = false;
     let liveWriteRepairTimer: number | null = null;
     let liveWriteRepairMaxTimer: number | null = null;
     let liveWriteRepairRaf: number | null = null;
@@ -466,16 +505,40 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
         );
       }
     };
-    // Capture snapshot at mount time — never read reactively
-    const snapshotAtMount = terminalSnapshot;
+    // Capture snapshot at mount time — never read reactively. Prefer a snapshot
+    // just flushed from a fast reattach over the (possibly stale) prop.
+    const snapshotAtMount = flushedSnapshot ?? terminalSnapshot;
     const fontReady = waitForTerminalFont(fontLoadTarget, terminalFontSize);
     const outputNormalizer = createTerminalOutputNormalizer();
-    const channel = new Channel<number[]>();
-    channel.onmessage = (data: number[]) => {
+    // PTY output arrives as raw bytes: the Rust side sends a `Response`
+    // (InvokeResponseBody::Raw) so the channel delivers a binary ArrayBuffer,
+    // not a JSON number-array. `new Uint8Array(buffer)` is a zero-copy view —
+    // no per-chunk JSON.parse + array copy on the webview main thread.
+    const channel = new Channel<ArrayBuffer>();
+    channel.onmessage = (data) => {
       if (!alive) return;
       hasLiveData = true;
+      const chunkBytes = data.byteLength;
       const text = outputNormalizer.normalize(new Uint8Array(data));
-      if (text) term.write(text, scheduleLiveWriteRepair);
+      if (!text) return;
+
+      // Backpressure: track xterm's un-parsed backlog and pause the PTY read
+      // thread when it gets too far ahead, resuming in the write callback once
+      // xterm catches up. Without this a flood queues unbounded IPC + grows
+      // xterm's internal buffer, janking the whole canvas.
+      pendingParseBytes += chunkBytes;
+      if (!readPaused && pendingParseBytes >= LIVE_WRITE_PAUSE_HIGH_WATER && ptyIdRef.current) {
+        readPaused = true;
+        invoke("pause_terminal_read", { id: ptyIdRef.current }).catch(() => {});
+      }
+      term.write(text, () => {
+        pendingParseBytes -= chunkBytes;
+        if (readPaused && pendingParseBytes <= LIVE_WRITE_PAUSE_LOW_WATER && ptyIdRef.current) {
+          readPaused = false;
+          invoke("resume_terminal_read", { id: ptyIdRef.current }).catch(() => {});
+        }
+        scheduleLiveWriteRepair();
+      });
     };
     const onDataDisposable = term.onData((data: string) => {
       if (ptyIdRef.current) {
@@ -563,13 +626,24 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
 
     return () => {
       alive = false;
-      if (attached) {
-        if (hasLiveData) {
-          const snapshot = serializeAddon.serialize({
-            scrollback: SNAPSHOT_SCROLLBACK_ROWS,
-          });
-          onSnapshotCaptured(id, snapshot || null);
+      // Capturing the scrollback snapshot (serializeAddon.serialize) is the
+      // expensive part of a detach. A teleport/zoom can detach many terminals
+      // in ONE React commit, so doing it synchronously here blocks the main
+      // thread N×. Defer it into the staggered dispose slot (one per frame) —
+      // it still runs before term.dispose(), and flushPendingDispose() runs it
+      // (and returns it) on a fast reattach, so no snapshot is ever lost.
+      let snapshotCaptured = false;
+      let capturedSnapshot: string | null = null;
+      const captureSnapshot = (): string | null => {
+        if (snapshotCaptured) return capturedSnapshot;
+        snapshotCaptured = true;
+        if (attached && hasLiveData) {
+          capturedSnapshot = serializeAddon.serialize({ scrollback: SNAPSHOT_SCROLLBACK_ROWS }) || null;
+          onSnapshotCaptured(id, capturedSnapshot);
         }
+        return capturedSnapshot;
+      };
+      if (attached) {
         // Detach without unmount (live-budget eviction / attach staggering):
         // keep a frozen visual of the terminal instead of a blank window.
         if (isStillMounted()) {
@@ -597,12 +671,13 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
       setIsSessionReady(false);
       const timer = window.setTimeout(() => {
         if (pendingDisposeRef.current?.term !== term) return;
+        captureSnapshot();
         term.dispose();
         if (pendingDisposeRef.current?.term === term) {
           pendingDisposeRef.current = null;
         }
       }, nextDisposeDelay());
-      pendingDisposeRef.current = { term, timer };
+      pendingDisposeRef.current = { term, timer, capture: captureSnapshot };
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- settings handled by separate effect; terminalSnapshot captured at mount via snapshotAtMount; link callbacks use refs to avoid remounting xterm; onPasteRequest/onSpawnError omitted — both are stable (useCallback with [] deps / useState setter)
   }, [flushPendingDispose, id, isPtyReady, onGhosted, onSnapshotCaptured, shouldAttach]);
@@ -611,6 +686,15 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
   useEffect(() => {
     const term = termInstanceRef.current;
     if (!term) return;
+    // Skip the redundant mount run — Effect B already created the terminal with
+    // the current settings and fit it. Only a real change needs to re-apply.
+    const prev = lastAppliedSettingsRef.current;
+    const changed =
+      prev.terminalFont !== terminalFont ||
+      prev.terminalFontSize !== terminalFontSize ||
+      prev.terminalTheme !== terminalTheme;
+    lastAppliedSettingsRef.current = { terminalFont, terminalFontSize, terminalTheme };
+    if (!changed) return;
     const fontFamily = TERMINAL_FONT_FAMILIES[terminalFont];
     const fontLoadTarget = TERMINAL_FONT_LOAD_TARGETS[terminalFont];
     term.options.fontFamily = fontFamily;
@@ -677,6 +761,11 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     const fit = fitAddonRef.current;
     const container = termRef.current;
     if (!fit || !term) return;
+    // Skip the redundant mount run — Effect B already fit at the current size.
+    const prev = lastFitSizeRef.current;
+    const changed = prev.windowWidth !== windowWidth || prev.windowHeight !== windowHeight;
+    lastFitSizeRef.current = { windowWidth, windowHeight };
+    if (!changed) return;
     requestAnimationFrame(() => {
       const buf = term.buffer.active;
       const wasAtBottom = buf.viewportY >= buf.baseY;

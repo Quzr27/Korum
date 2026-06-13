@@ -12,10 +12,10 @@ use commands::{
     attach_terminal, confirm_app_exit, create_directory, create_file, create_terminal, delete_path,
     detach_terminal, fetch_claude_usage, fetch_codex_usage, get_agent_statuses, get_file_diff,
     get_git_file_status, get_git_status, get_terminal_preview, kill_terminal, load_settings,
-    load_state, open_external_url,
-    read_code_file_content, read_directory, read_file_content, register_agent_terminal,
-    rename_path, resize_terminal, save_settings, save_state, start_watching, stop_watching,
-    unregister_agent_terminal, write_terminal,
+    load_state, open_external_url, pause_terminal_read, read_code_file_content, read_directory,
+    read_file_content, register_agent_terminal, rename_path, resize_terminal, resume_terminal_read,
+    save_settings, save_state, start_watching, stop_watching, unregister_agent_terminal,
+    write_terminal,
 };
 use pty::PtyState;
 use quit_guard::QuitGuardState;
@@ -155,6 +155,8 @@ pub fn run() {
             create_terminal,
             attach_terminal,
             detach_terminal,
+            pause_terminal_read,
+            resume_terminal_read,
             write_terminal,
             resize_terminal,
             kill_terminal,
