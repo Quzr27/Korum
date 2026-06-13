@@ -4,6 +4,17 @@ All notable changes to Korum will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.2] - 2026-06-13
+
+### Changed
+- **Terminal attach performance** — terminals now attach and detach more deliberately around viewport changes, reducing xterm work during large-canvas navigation.
+- **Code window rendering** — syntax highlighting moved through a worker-backed, cached pipeline with virtualization helpers for smoother large-file viewing.
+- **Backend PTY throughput** — Rust PTY streaming and agent-status paths now hold locks for shorter periods and avoid redundant work.
+- **Smart-link parsing** — file and URL terminal links handle additional wrapped and glyph-normalized output cases.
+
+### Fixed
+- **Large workspace responsiveness** — optimized terminal, code window, and canvas paths to keep sessions responsive with many visible panes.
+
 ## [0.4.1] - 2026-06-13
 
 ### Added
