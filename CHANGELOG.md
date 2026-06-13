@@ -4,6 +4,23 @@ All notable changes to Korum will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.1] - 2026-06-13
+
+### Added
+- **War-room focus mode** — a dedicated mode for concentrating on active agent work, with sidebar and shortcut support.
+- **Terminal status icon font** — bundled status glyphs keep packaged builds self-contained and avoid runtime icon loading surprises.
+
+### Changed
+- **Terminal and canvas scale** — viewport-aware attachment, token caching, and backend PTY hardening improve responsiveness with 50+ terminals.
+- **Settings surfaces** — refreshed settings layout, terminal settings, atmosphere/theme handling, and light-theme polish.
+- **Agent status presentation** — status is shown as a titlebar line with matching sidebar/minimap indicators.
+- **DMG installer background** — regenerated packaging art and build notes for the release installer window.
+
+### Fixed
+- **Terminal glyph rendering** — normalizes problematic terminal status glyphs for more reliable display.
+- **Rust backend resilience** — tightened PTY, usage, and agent-status command handling for packaged app stability.
+- **Code viewer performance** — token LRU caching and staggered attachment reduce heavy work while navigating larger workspaces.
+
 ## [0.4.0] - 2026-06-07
 
 ### Added

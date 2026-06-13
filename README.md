@@ -5,11 +5,9 @@ All your terminals. One canvas.
 
 Drag, resize, zoom — organize your workflow spatially instead of switching between tabs.
 
-![Korum workspace with terminals and notes](screenshot-1.png)
+![Korum spatial terminal workspace](korum-v0.4.1-screenshot.png)
 
-![Korum with file tree, code viewer](screenshot-2.png)
-
-> **v0.4.0** — early release. macOS only for now.
+> **v0.4.1** — early release. macOS only for now.
 
 ## Status
 
@@ -17,19 +15,13 @@ Korum is currently in early release. Right now, the focus is stability, persiste
 
 ## Features
 
-- Infinite pan & zoom canvas with terminal windows
-- Markdown notes alongside terminals
-- **Agent status** — terminals glow green while an AI agent (Claude Code / Codex) is working, amber while it waits for your input; mirrored as sidebar and minimap status dots so you can track sessions across workspaces
-- **Terminal Smart Links** — click http(s) URLs and local file paths from terminal output to open browser links or CodeWindows with line highlights
-- **Diff tethers** — a line on the canvas connects a terminal to the diff window it opened, so you can see which terminal produced which change
-- **File tree sidebar** — per-workspace file browser with .gitignore filtering, git status badges, context menu CRUD, active file reveal, and preserved file search
-- **Code viewer** — read-only file viewer with Shiki syntax highlighting (16 themes), inline diff view, minimap, auto-refresh, and terminal-link line targeting
-- **Magnetic pane snapping** — align terminals, notes, and code windows with zoom-stable guide lines
-- Workspaces backed by project folders or scratch spaces
-- Session persistence (positions, sizes, and content survive restarts)
-- Built for scale — viewport-aware rendering keeps off-screen terminals, notes, and code windows lightweight
-- 25 terminal themes, 5 canvas atmospheres, customizable fonts, font sizes, and zoom speed
-- Claude Code & OpenAI Codex usage limits tracking with session, weekly, model, credits, and rate-limit backoff handling
+- **Spatial terminal canvas** — arrange terminals, notes, and code windows on an infinite pan/zoom workspace.
+- **Agent-aware workflow** — track Claude Code and Codex activity through terminal status lines, sidebar dots, and minimap indicators.
+- **War-room mode** — focus the workspace around active agent sessions when you need a calmer view.
+- **Terminal Smart Links** — open URLs and local file paths from terminal output directly into browser or CodeWindows.
+- **Code viewer with diffs** — inspect files with Shiki highlighting, inline changes, minimap, and line targeting.
+- **Project file tree** — browse workspaces with git status, search, file actions, and active file reveal.
+- **Built for large sessions** — keeps 50+ terminals responsive with viewport-aware rendering and staggered attachment.
 
 ## Install
 
