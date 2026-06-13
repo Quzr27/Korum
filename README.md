@@ -7,7 +7,7 @@ Drag, resize, zoom — organize your workflow spatially instead of switching bet
 
 ![Korum spatial terminal workspace](korum-v0.4.1-screenshot.png)
 
-> **v0.4.1** — early release. macOS only for now.
+> **v0.4.2** — early release. macOS only for now.
 
 ## Status
 
