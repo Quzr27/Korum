@@ -51,6 +51,19 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Build against the macOS 26 SDK so the app opts into the Tahoe window
+      # chrome (titlebar height + traffic-light size/position). The macos-latest
+      # image defaults to Xcode 16.4 (macOS 15 SDK), which makes macOS render the
+      # legacy chrome at runtime and misaligns the HTML sidebar toggle that is
+      # tuned to the macOS 26 traffic-light row. Xcode 26.x ships on this image.
+      - name: Select Xcode 26 (match local SDK)
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then echo "No Xcode 26 found on runner" >&2; exit 1; fi
+          echo "Selecting $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcrun --sdk macosx --show-sdk-version
+
       - name: Build Tauri app
         run: bunx tauri build --target ${{ matrix.target }}
 
