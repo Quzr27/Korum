@@ -4,8 +4,9 @@ import "@xterm/xterm/css/xterm.css";
 import { useSettings } from "@/lib/settings-context";
 import { getXtermTheme, TERMINAL_FONT_FAMILIES } from "@/lib/settings";
 import { useXtermSession, type PendingDispose } from "@/lib/xterm-session";
+import { getTerminalDisplayState } from "@/lib/terminal-display-state";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { PencilEdit01Icon, Delete01Icon } from "@hugeicons/core-free-icons";
+import { PencilEdit01Icon, Delete01Icon, PlayIcon } from "@hugeicons/core-free-icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -64,6 +65,7 @@ interface Props {
   onRename: (id: string, title: string) => void;
   onPasteRequest: (request: PasteRequest) => void;
   onOpenFileLink: (workspaceId: string, originTerminalId: string, filePath: string, line: number, column?: number) => void;
+  onActivateDemoTerminal: (id: string) => void;
   onLiveRectChange?: (id: string, rect: WindowMotionRect | null) => void;
 }
 
@@ -89,6 +91,7 @@ export default memo(function TerminalWindow({
   onRename,
   onPasteRequest,
   onOpenFileLink,
+  onActivateDemoTerminal,
   onLiveRectChange,
 }: Props) {
   const { settings } = useSettings();
@@ -110,6 +113,10 @@ export default memo(function TerminalWindow({
   const hydrationSettledRef = useRef(false);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
+  const demoText = useMemo(() => (
+    win.demoContent && win.demoContent.length > 0 ? win.demoContent.join("\n") : null
+  ), [win.demoContent]);
+  const isDemoTerminal = demoText !== null;
 
   const reportHydrationSettled = useCallback(() => {
     if (hydrationSettledRef.current) return;
@@ -138,6 +145,16 @@ export default memo(function TerminalWindow({
   // On remount (workspace switch back): restores from win.ptyId — no re-spawn needed.
   // Cleanup does NOT kill PTY — App.tsx owns PTY destruction (removeWindow/deleteWorkspace).
   useEffect(() => {
+    if (isDemoTerminal) {
+      ptyIdRef.current = null;
+      mountedRef.current = false;
+      setSpawnError(null);
+      setIsPtyReady(false);
+      onPtySpawned(id, null);
+      onSnapshotCaptured(id, null);
+      reportHydrationSettled();
+      return;
+    }
     if (!shouldHydrate) return;
 
     // Fast path: restore from persisted ptyId (component remounted after workspace switch)
@@ -200,7 +217,7 @@ export default memo(function TerminalWindow({
       // PTY is NOT killed here — App.tsx kills it on removeWindow/deleteWorkspace.
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- respawnTrigger forces re-spawn on reopen; cwdRef/onPtySpawned stable via refs
-  }, [shouldHydrate, respawnTrigger]);
+  }, [shouldHydrate, respawnTrigger, isDemoTerminal]);
 
   const handleOpenFileLink = useCallback((filePath: string, line: number, column?: number) => {
     onOpenFileLink(win.workspaceId, id, filePath, line, column);
@@ -214,6 +231,7 @@ export default memo(function TerminalWindow({
   const [hasGhost, setHasGhost] = useState(false);
 
   useEffect(() => {
+    if (isDemoTerminal) return;
     if (!isPtyReady || shouldAttach || hasGhost) return;
     const ptyId = ptyIdRef.current;
     if (!ptyId) return;
@@ -237,13 +255,13 @@ export default memo(function TerminalWindow({
       cancelled = true;
       if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [isPtyReady, shouldAttach, hasGhost]);
+  }, [isDemoTerminal, isPtyReady, shouldAttach, hasGhost]);
 
   // ── xterm session (Effect B + settings/focus/resize effects) ──
   const { termInstanceRef, isSessionReady } = useXtermSession({
     id,
     isPtyReady,
-    shouldAttach,
+    shouldAttach: isDemoTerminal ? false : shouldAttach,
     terminalSnapshot,
     terminalFont: settings.terminalFont,
     terminalFontSize: settings.terminalFontSize,
@@ -293,9 +311,20 @@ export default memo(function TerminalWindow({
 
   const handleClose = useCallback(() => onClose(id), [id, onClose]);
   const handleFocus = useCallback(() => onFocus(id), [id, onFocus]);
+  const handleActivateDemoTerminal = useCallback(() => {
+    onActivateDemoTerminal(id);
+  }, [id, onActivateDemoTerminal]);
 
   const terminalTheme = getXtermTheme(settings.terminalTheme);
   const chrome = useMemo(() => getChromeShades(terminalTheme.background), [terminalTheme.background]);
+  const displayState = getTerminalDisplayState({
+    isDemoTerminal,
+    isSessionReady,
+    spawnError,
+    isPtyReady,
+    hasGhost,
+    previewText,
+  });
   const pendingMessage = shouldHydrate
     ? "Starting shell..."
     : "Queued for restore...";
@@ -354,7 +383,35 @@ export default memo(function TerminalWindow({
 
           <div className="window-content" onMouseDown={() => termInstanceRef.current?.focus()}>
             <div ref={termRef} className="terminal-container" style={spawnError ? { pointerEvents: "none" } : undefined} />
-            {!isSessionReady && !spawnError && isPtyReady && !hasGhost && previewText && (
+            {displayState.showDemoPreview && demoText && (
+              <pre
+                className="terminal-preview terminal-demo-preview"
+                aria-label="Static demo terminal preview"
+                translate="no"
+                style={{
+                  color: terminalTheme.foreground,
+                  fontFamily: TERMINAL_FONT_FAMILIES[settings.terminalFont],
+                  fontSize: settings.terminalFontSize,
+                }}
+              >
+                {demoText}
+              </pre>
+            )}
+            {displayState.showDemoPreview && win.demoStartLabel && (
+              <button
+                type="button"
+                className="terminal-demo-start-btn"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleActivateDemoTerminal();
+                }}
+              >
+                <HugeiconsIcon icon={PlayIcon} size={12} aria-hidden="true" />
+                {win.demoStartLabel}
+              </button>
+            )}
+            {displayState.showDetachedPreview && previewText && (
               <pre
                 className="terminal-preview"
                 aria-hidden="true"
@@ -368,7 +425,7 @@ export default memo(function TerminalWindow({
                 {previewText}
               </pre>
             )}
-            {!isSessionReady && !spawnError && !isPtyReady && (
+            {displayState.showPendingOverlay && (
               <div className="terminal-pending-overlay">
                 <p className="terminal-error-text">{pendingMessage}</p>
               </div>

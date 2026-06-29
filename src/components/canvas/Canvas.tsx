@@ -63,6 +63,7 @@ interface CanvasProps {
   onPasteRequest: (request: PasteRequest) => void;
   onOpenTerminalFileLink: (workspaceId: string, originTerminalId: string, filePath: string, line: number, column?: number) => void;
   onViewModeChange: (id: string, mode: CodeViewMode) => void;
+  onActivateDemoTerminal: (id: string) => void;
 }
 
 export default memo(function Canvas({
@@ -93,6 +94,7 @@ export default memo(function Canvas({
   onPasteRequest,
   onOpenTerminalFileLink,
   onViewModeChange,
+  onActivateDemoTerminal,
 }: CanvasProps) {
   const { settings } = useSettings();
   const [isPanning, setIsPanning] = useState(false);
@@ -584,6 +586,7 @@ export default memo(function Canvas({
                   onRename={onRename}
                   onPasteRequest={onPasteRequest}
                   onOpenFileLink={onOpenTerminalFileLink}
+                  onActivateDemoTerminal={onActivateDemoTerminal}
                   onLiveRectChange={handleLiveRectChange}
                 />
               );

@@ -197,6 +197,50 @@ describe("hydratePersistedState", () => {
     expect(win.height).toBe(8192);
   });
 
+  it("preserves sanitized demo terminal content without restoring a pty id", () => {
+    const hydrated = hydratePersistedState(
+      makeState({
+        windows: [
+          {
+            id: "demo-term",
+            type: "terminal",
+            x: 0,
+            y: 0,
+            width: 720,
+            height: 420,
+            zIndex: 1,
+            title: "Claude: implementation",
+            workspaceId: "ws-1",
+            ptyId: "session-only",
+            demoContent: [
+              "$ claude --continue pr-review",
+              "Planning UI changes",
+              "",
+              42,
+            ],
+            demoStartLabel: "Start Claude",
+            demoStartCommand: "claude",
+          } as unknown as PersistedState["windows"][number],
+        ],
+      }),
+    );
+
+    expect(hydrated.windows).toEqual([
+      expect.objectContaining({
+        id: "demo-term",
+        type: "terminal",
+          demoContent: [
+            "$ claude --continue pr-review",
+            "Planning UI changes",
+            "",
+          ],
+          demoStartLabel: "Start Claude",
+          demoStartCommand: "claude",
+        }),
+      ]);
+    expect(hydrated.windows[0]).not.toHaveProperty("ptyId");
+  });
+
   it("guards against NaN/Infinity in viewport and clamps zoom", () => {
     const hydrated = hydratePersistedState(
       makeState({

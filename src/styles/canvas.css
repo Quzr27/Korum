@@ -144,19 +144,11 @@
 
 .canvas-bg::before {
   inset: -10%;
-  /* The war-room mesh and its blur are pinned here at full strength so the
-     GPU rasterizes the Gaussian kernel once; toggling war-room only
-     crossfades opacity (compositor-only), including a real fade-out. */
-  background: var(--war-room-canvas-mesh);
-  filter: blur(150px);
+  background: var(--canvas-mesh);
+  filter: blur(var(--canvas-blur));
   transform: translateZ(0);
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-/* War-room: fade the already-blurred layer in */
-.war-room .canvas-bg::before {
   opacity: var(--canvas-mesh-opacity);
+  transition: opacity 0.3s ease;
 }
 
 /* Suppress compositor promotion changes during pan/zoom */
