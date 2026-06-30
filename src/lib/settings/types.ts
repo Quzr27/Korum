@@ -97,8 +97,8 @@ export const BASE_COLOR_SWATCHES: Record<BaseColor, string> = {
 export const CANVAS_ATMOSPHERE_LABELS: Record<CanvasAtmosphere, string> = {
   workbench: "Workbench",
   blueprint: "Blueprint",
-  draft: "Draft",
-  signal: "Signal",
+  draft: "Lattice",
+  signal: "Field",
 };
 
 export const CANVAS_ATMOSPHERES: readonly CanvasAtmosphere[] = Object.keys(

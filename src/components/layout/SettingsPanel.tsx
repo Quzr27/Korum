@@ -364,17 +364,19 @@ const SURFACE_PREVIEW_STYLES: Record<CanvasAtmosphere, CSSProperties> = {
   },
   blueprint: {
     backgroundImage:
-      "linear-gradient(color-mix(in oklch, var(--foreground) 10%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in oklch, var(--foreground) 10%, transparent) 1px, transparent 1px), linear-gradient(180deg, color-mix(in oklch, var(--background) 84%, var(--card) 16%) 0%, color-mix(in oklch, var(--background) 76%, black 24%) 100%)",
-    backgroundSize: "18px 18px, 18px 18px, auto",
+      "linear-gradient(color-mix(in oklch, var(--foreground) 14%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in oklch, var(--foreground) 14%, transparent) 1px, transparent 1px), linear-gradient(color-mix(in oklch, var(--sidebar-primary) 12%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in oklch, var(--sidebar-primary) 12%, transparent) 1px, transparent 1px), linear-gradient(180deg, color-mix(in oklch, var(--background) 84%, var(--card) 16%) 0%, color-mix(in oklch, var(--background) 76%, black 24%) 100%)",
+    backgroundSize: "18px 18px, 18px 18px, 9px 9px, 9px 9px, auto",
   },
   draft: {
     backgroundImage:
-      "linear-gradient(color-mix(in oklch, var(--foreground) 8%, transparent) 1px, transparent 1px), linear-gradient(112deg, transparent 0 49%, color-mix(in oklch, var(--foreground) 7%, transparent) 49.5% 50.5%, transparent 51%), linear-gradient(180deg, color-mix(in oklch, var(--background) 86%, var(--card) 14%) 0%, color-mix(in oklch, var(--background) 82%, black 18%) 100%)",
-    backgroundSize: "100% 10px, 28px 28px, auto",
+      "radial-gradient(circle, color-mix(in oklch, var(--foreground) 14%, transparent) 0 0.85px, transparent 1px), radial-gradient(circle, color-mix(in oklch, var(--sidebar-primary) 12%, transparent) 0 0.75px, transparent 1px), linear-gradient(180deg, color-mix(in oklch, var(--background) 86%, var(--card) 14%) 0%, color-mix(in oklch, var(--background) 82%, black 18%) 100%)",
+    backgroundPosition: "0 0, 14px 14px, 0 0",
+    backgroundSize: "28px 28px, 28px 28px, auto",
   },
   signal: {
     backgroundImage:
-      "repeating-linear-gradient(0deg, color-mix(in oklch, var(--foreground) 6%, transparent) 0 1px, transparent 1px 4px), repeating-linear-gradient(90deg, transparent 0 24px, color-mix(in oklch, var(--sidebar-primary) 14%, transparent) 24px 25px, transparent 25px 48px), linear-gradient(180deg, color-mix(in oklch, var(--background) 78%, black 22%) 0%, color-mix(in oklch, var(--background) 66%, black 34%) 100%)",
+      "radial-gradient(circle, color-mix(in oklch, var(--foreground) 12%, transparent) 0 0.8px, transparent 1px), linear-gradient(color-mix(in oklch, var(--sidebar-primary) 14%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in oklch, var(--sidebar-primary) 14%, transparent) 1px, transparent 1px), linear-gradient(180deg, color-mix(in oklch, var(--background) 78%, black 22%) 0%, color-mix(in oklch, var(--background) 66%, black 34%) 100%)",
+    backgroundSize: "14px 14px, 56px 56px, 56px 56px, auto",
   },
 };
 
@@ -386,11 +388,12 @@ function CanvasAtmospherePreview({ atmosphere }: { atmosphere: CanvasAtmosphere 
       aria-hidden="true"
     >
       <span
-        className="absolute inset-0 opacity-40"
+        className="absolute inset-0"
         style={{
           backgroundImage:
-            "radial-gradient(circle, color-mix(in oklch, var(--foreground) 18%, transparent) 0.75px, transparent 0.75px)",
+            "radial-gradient(circle, color-mix(in oklch, var(--foreground) 14%, transparent) 0.75px, transparent 0.75px)",
           backgroundSize: "18px 18px",
+          opacity: 0.22,
         }}
       />
     </span>

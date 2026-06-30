@@ -33,6 +33,9 @@ export interface TerminalWindow extends BaseWindow {
   terminalId?: string;
   initialCwd?: string;
   ptyId?: string;
+  demoContent?: string[];
+  demoStartLabel?: string;
+  demoStartCommand?: string;
 }
 
 export interface NoteWindow extends BaseWindow {

@@ -35,6 +35,47 @@
   opacity: 0.6;
 }
 
+.window-content .terminal-demo-preview {
+  opacity: 0.88;
+}
+
+.terminal-demo-start-btn {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in oklch, var(--ws-accent, var(--primary)) 42%, transparent);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--term-titlebar, var(--card)) 92%, transparent), color-mix(in oklch, var(--term-bg, var(--card)) 88%, transparent));
+  color: color-mix(in oklch, var(--ws-accent, var(--primary)) 76%, var(--foreground));
+  box-shadow: 0 8px 24px color-mix(in oklch, var(--term-bg, black) 72%, transparent);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s, transform 0.12s, background 0.12s;
+}
+
+.terminal-demo-start-btn:hover {
+  border-color: color-mix(in oklch, var(--ws-accent, var(--primary)) 70%, transparent);
+  color: var(--foreground);
+  transform: translateY(-1px);
+}
+
+.terminal-demo-start-btn:active {
+  transform: translateY(0);
+}
+
+.terminal-demo-start-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 .terminal-container .xterm {
   /* Gutter lives on the xterm element (term.element), NOT the container.
      FitAddon subtracts term.element padding when computing cols/rows, so the

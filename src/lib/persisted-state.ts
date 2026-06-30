@@ -35,6 +35,10 @@ const VALID_ICONS: ReadonlySet<string> = new Set<string>([
   "diamond", "bug", "coffee", "crown", "git", "api", "database", "server",
   "cpu", "cloud", "shield", "package", "layers", "dashboard", "target", "wrench",
 ] satisfies WorkspaceIconKey[]);
+const MAX_DEMO_TERMINAL_LINES = 80;
+const MAX_DEMO_TERMINAL_LINE_LENGTH = 240;
+const MAX_DEMO_START_LABEL_LENGTH = 48;
+const MAX_DEMO_START_COMMAND_LENGTH = 160;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -80,6 +84,21 @@ function sanitizeViewport(value: unknown): ViewportState | null {
     : 1;
 
   return { panX, panY, zoom };
+}
+
+function sanitizeDemoContent(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const lines = value
+    .filter((line): line is string => typeof line === "string")
+    .slice(0, MAX_DEMO_TERMINAL_LINES)
+    .map((line) => line.slice(0, MAX_DEMO_TERMINAL_LINE_LENGTH));
+  return lines.length > 0 ? lines : undefined;
+}
+
+function sanitizeTrimmedString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, maxLength) : undefined;
 }
 
 function sanitizeWindow(value: unknown, defaults: WindowDefaults): WindowState | null {
@@ -136,6 +155,9 @@ function sanitizeWindow(value: unknown, defaults: WindowDefaults): WindowState |
       type: "terminal",
       terminalId: typeof value.terminalId === "string" ? value.terminalId : undefined,
       initialCwd: typeof value.initialCwd === "string" ? value.initialCwd : undefined,
+      demoContent: sanitizeDemoContent(value.demoContent),
+      demoStartLabel: sanitizeTrimmedString(value.demoStartLabel, MAX_DEMO_START_LABEL_LENGTH),
+      demoStartCommand: sanitizeTrimmedString(value.demoStartCommand, MAX_DEMO_START_COMMAND_LENGTH),
     };
   }
   if (value.type === "code") {

@@ -38,6 +38,8 @@ import { WINDOW_GRID_GAP } from "@/lib/window-snapping";
 import { confirmAppQuit, QUIT_REQUESTED_EVENT } from "@/lib/quit-guard";
 import { isWarRoomModalGuardActive, shouldToggleWarRoomShortcut } from "@/lib/war-room-shortcuts";
 import { startWindowDragFromMouseDown } from "@/lib/window-drag";
+import { createDemoWorkspaceTemplate } from "@/lib/demo-workspace-template";
+import { activateDemoTerminalWindow } from "@/lib/demo-terminal-activation";
 import type { PersistedState, ViewportState } from "@/lib/persistence";
 import type { AgentStatus, WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest, CodeViewMode, GitFileStatus } from "@/types";
 
@@ -119,6 +121,7 @@ export default function App() {
   const hydratedTerminalIdsRef = useRef(new Set<string>());
   const bootingTerminalIdsRef = useRef(new Set<string>());
   const terminalSnapshotsRef = useRef<Record<string, string>>({});
+  const pendingTerminalStartCommandsRef = useRef(new Map<string, string>());
   const codeTargetNonceRef = useRef(0);
   const gitFileStatusRequestsRef = useRef<Map<string, Promise<GitFileStatus | null>>>(new Map());
   const openFileRequestsRef = useRef<Set<string>>(new Set());
@@ -260,6 +263,7 @@ export default function App() {
       hydratedTerminalIdsRef.current = new Set();
       bootingTerminalIdsRef.current = new Set();
       terminalSnapshotsRef.current = {};
+      pendingTerminalStartCommandsRef.current = new Map();
       setHydratedTerminalIds(new Set());
       setBootingTerminalIds(new Set());
       countsRef.current = { terminal: 0, note: 0, code: 0 };
@@ -698,6 +702,14 @@ export default function App() {
       }).catch((error) => {
         console.warn("[agent-status] Register failed:", error);
       });
+      const startCommand = pendingTerminalStartCommandsRef.current.get(windowId);
+      if (startCommand) {
+        pendingTerminalStartCommandsRef.current.delete(windowId);
+        const data = startCommand.endsWith("\n") ? startCommand : `${startCommand}\n`;
+        invoke("write_terminal", { id: ptyId, data }).catch((error) => {
+          console.warn("[terminal] Demo start command failed:", error);
+        });
+      }
     } else {
       invoke("unregister_agent_terminal", { terminalId: windowId }).catch(() => {});
       clearAgentStatus(windowId);
@@ -712,6 +724,24 @@ export default function App() {
     );
     // No save — ptyId is session-ephemeral
   }, [clearAgentStatus]);
+
+  const activateDemoTerminal = useCallback((id: string) => {
+    const win = stateRef.current.windows.find((window) => window.id === id);
+    if (!win || win.type !== "terminal" || !win.demoContent) return;
+
+    const activated = activateDemoTerminalWindow(win);
+    if (activated.startCommand) {
+      pendingTerminalStartCommandsRef.current.set(id, activated.startCommand);
+    } else {
+      pendingTerminalStartCommandsRef.current.delete(id);
+    }
+    delete terminalSnapshotsRef.current[id];
+    setWindows((prev) => prev.map((window) => (
+      window.id === id ? { ...activated.window, updatedAt: Date.now() } : window
+    )));
+    setActiveWindowId(id);
+    saveAfterUpdate();
+  }, [saveAfterUpdate]);
 
   const handleTerminalSnapshotCaptured = useCallback((windowId: string, snapshot: string | null) => {
     if (snapshot) {
@@ -759,6 +789,7 @@ export default function App() {
       invoke("kill_terminal", { id: win.ptyId }).catch(() => {});
     }
     delete terminalSnapshotsRef.current[id];
+    pendingTerminalStartCommandsRef.current.delete(id);
     pendingZIndexRef.current.delete(id);
     // Dismiss paste dialog if it belongs to the terminal being closed
     setPasteConfirmState((prev) => (prev?.terminalId === id ? null : prev));
@@ -884,6 +915,31 @@ export default function App() {
     saveAfterUpdate(); // immediate — structural change
   }, [saveAfterUpdate]);
 
+  const createDemoWorkspace = useCallback(() => {
+    const demo = createDemoWorkspaceTemplate();
+    const { activeWorkspaceId: curId, pan, zoom } = stateRef.current;
+    if (curId) {
+      viewportsRef.current[curId] = { panX: pan.x, panY: pan.y, zoom };
+    }
+    viewportsRef.current[demo.workspace.id] = demo.viewport;
+
+    const counts = { ...countsRef.current };
+    for (const window of demo.windows) {
+      counts[window.type] += 1;
+    }
+    countsRef.current = counts;
+    nextZRef.current = Math.max(nextZRef.current, demo.nextZ);
+
+    setSettingsDismissVersion((value) => value + 1);
+    setPan({ x: demo.viewport.panX, y: demo.viewport.panY });
+    setZoom(demo.viewport.zoom);
+    setWorkspaces((prev) => [...prev, demo.workspace]);
+    setWindows((prev) => [...prev, ...demo.windows]);
+    setActiveWorkspaceId(demo.workspace.id);
+    setActiveWindowId(demo.windows[0]?.id ?? null);
+    saveAfterUpdate();
+  }, [saveAfterUpdate]);
+
   const updateWorkspace = useCallback((id: string, updates: Partial<Omit<Workspace, "id">>) => {
     setWorkspaces((prev) => prev.map((ws) => (ws.id === id ? { ...ws, ...updates } : ws)));
     saveAfterUpdate(); // immediate — structural change
@@ -901,6 +957,7 @@ export default function App() {
       }
       if (win.workspaceId === id) {
         delete terminalSnapshotsRef.current[win.id];
+        pendingTerminalStartCommandsRef.current.delete(win.id);
         pendingZIndexRef.current.delete(win.id);
       }
     }
@@ -1143,6 +1200,7 @@ export default function App() {
         onPasteRequest={handlePasteRequest}
         onOpenTerminalFileLink={openTerminalFileLink}
         onViewModeChange={setCodeViewMode}
+        onActivateDemoTerminal={activateDemoTerminal}
       />
 
       {hasWorkspaces ? (
@@ -1172,7 +1230,10 @@ export default function App() {
       ) : null}
 
       {hasWorkspaces ? null : (
-        <EmptyCanvasState onCreateWorkspace={() => setCreateDialogOpen(true)} />
+        <EmptyCanvasState
+          onCreateWorkspace={() => setCreateDialogOpen(true)}
+          onCreateDemoWorkspace={createDemoWorkspace}
+        />
       )}
 
       <CreateWorkspaceDialog

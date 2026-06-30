@@ -1,11 +1,14 @@
 import BrandMark from "@/components/branding/BrandMark";
 import { Button } from "@/components/ui/button";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { Rocket01Icon } from "@hugeicons/core-free-icons";
 
 interface EmptyCanvasStateProps {
   onCreateWorkspace: () => void;
+  onCreateDemoWorkspace: () => void;
 }
 
-export default function EmptyCanvasState({ onCreateWorkspace }: EmptyCanvasStateProps) {
+export default function EmptyCanvasState({ onCreateWorkspace, onCreateDemoWorkspace }: EmptyCanvasStateProps) {
   return (
     <div className="absolute inset-0 flex items-center justify-center px-6">
       <div
@@ -50,27 +53,38 @@ export default function EmptyCanvasState({ onCreateWorkspace }: EmptyCanvasState
           </p>
         </div>
 
-        <Button
-          type="button"
-          onClick={onCreateWorkspace}
-          className="es-rise es-rise-2 es-cta-shimmer gap-2 rounded-full px-3.5"
-        >
-          <svg
-            width="10"
-            height="10"
-            viewBox="0 0 16 16"
-            fill="none"
-            aria-hidden="true"
+        <div className="es-rise es-rise-2 flex flex-wrap items-center justify-center gap-2">
+          <Button
+            type="button"
+            onClick={onCreateWorkspace}
+            className="es-cta-shimmer gap-2 rounded-full px-3.5"
           >
-            <path
-              d="M8 3v10M3 8h10"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          </svg>
-          New workspace
-        </Button>
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 16 16"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M8 3v10M3 8h10"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+            New workspace
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onCreateDemoWorkspace}
+            className="gap-2 rounded-full px-3.5"
+          >
+            <HugeiconsIcon icon={Rocket01Icon} size={13} aria-hidden="true" />
+            Try demo workspace
+          </Button>
+        </div>
       </div>
     </div>
   );
