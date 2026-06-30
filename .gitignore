@@ -40,6 +40,9 @@ AGENTS.md
 # Landing page (separate static site with independent release copy)
 LP/
 
+# Local research notes
+docs/research/
+
 # CodeGraph (local code-intelligence index)
 .codegraph/
 .mcp.json
