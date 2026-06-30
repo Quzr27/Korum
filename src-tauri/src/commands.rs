@@ -235,6 +235,19 @@ pub async fn read_directory(
 }
 
 #[tauri::command]
+pub async fn search_workspace_files(
+    root_path: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<crate::file_tree::WorkspaceFileSearchEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::file_tree::search_workspace_files(&root_path, &query, limit.unwrap_or(50))
+    })
+    .await
+    .map_err(|e| format!("search_workspace_files task failed: {e}"))?
+}
+
+#[tauri::command]
 pub fn get_git_status(root_path: String) -> Result<crate::file_tree::GitStatusResult, String> {
     crate::file_tree::get_git_status(&root_path)
 }

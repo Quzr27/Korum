@@ -99,6 +99,8 @@ describe("handleTerminalShortcut", () => {
       { key: "n", metaKey: true, desc: "Cmd+N (new terminal)" },
       { key: "N", metaKey: true, shiftKey: true, desc: "Cmd+Shift+N (new note)" },
       { key: "w", metaKey: true, desc: "Cmd+W (close window)" },
+      { key: "p", metaKey: true, desc: "Cmd+P (command center)" },
+      { key: "r", metaKey: true, desc: "Cmd+R (reset viewport)" },
       { key: "W", metaKey: true, shiftKey: true, desc: "Cmd+Shift+W (new workspace)" },
       { key: "?", metaKey: true, shiftKey: true, desc: "Cmd+Shift+? (shortcuts)" },
       { key: "A", metaKey: true, shiftKey: true, desc: "Cmd+Shift+A (arrange)" },
@@ -113,8 +115,22 @@ describe("handleTerminalShortcut", () => {
     });
 
     it.each([
+      { key: "p", ctrlKey: true, desc: "Ctrl+P" },
+      { key: "r", ctrlKey: true, desc: "Ctrl+R" },
+    ])("keeps $desc terminal-owned for readline behavior", ({ desc: _, ...init }) => {
+      const context = makeContext();
+      const result = handleTerminalShortcut(
+        makeKeyboardEvent("keydown", init),
+        context,
+      );
+      expect(result).toBe(true);
+    });
+
+    it.each([
       { key: "n", metaKey: true, desc: "Cmd+N" },
       { key: "w", metaKey: true, desc: "Cmd+W" },
+      { key: "p", metaKey: true, desc: "Cmd+P" },
+      { key: "r", metaKey: true, desc: "Cmd+R" },
       { key: "W", metaKey: true, shiftKey: true, desc: "Cmd+Shift+W" },
       { key: "?", metaKey: true, shiftKey: true, desc: "Cmd+Shift+?" },
       { key: "A", metaKey: true, shiftKey: true, desc: "Cmd+Shift+A" },

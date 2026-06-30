@@ -34,9 +34,21 @@ describe("war-room shortcut guard", () => {
     expect(isWarRoomModalGuardActive({
       quitDialogOpen: false,
       shortcutsOpen: false,
+      commandCenterOpen: false,
       createDialogOpen: false,
       pasteConfirmOpen: false,
       sidebarModalOpen: true,
+    })).toBe(true);
+  });
+
+  it("treats the command center as a modal guard", () => {
+    expect(isWarRoomModalGuardActive({
+      quitDialogOpen: false,
+      shortcutsOpen: false,
+      commandCenterOpen: true,
+      createDialogOpen: false,
+      pasteConfirmOpen: false,
+      sidebarModalOpen: false,
     })).toBe(true);
   });
 });

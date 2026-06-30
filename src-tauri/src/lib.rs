@@ -14,8 +14,8 @@ use commands::{
     get_git_file_status, get_git_status, get_terminal_preview, kill_terminal, load_settings,
     load_state, open_external_url, pause_terminal_read, read_code_file_content, read_directory,
     read_file_content, register_agent_terminal, rename_path, resize_terminal, resume_terminal_read,
-    save_settings, save_state, start_watching, stop_watching, unregister_agent_terminal,
-    write_terminal,
+    save_settings, save_state, search_workspace_files, start_watching, stop_watching,
+    unregister_agent_terminal, write_terminal,
 };
 use pty::PtyState;
 use quit_guard::QuitGuardState;
@@ -173,6 +173,7 @@ pub fn run() {
             load_settings,
             confirm_app_exit,
             read_directory,
+            search_workspace_files,
             get_git_status,
             get_git_file_status,
             read_file_content,

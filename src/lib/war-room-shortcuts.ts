@@ -3,6 +3,7 @@ type ShortcutEvent = Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftK
 export interface WarRoomModalGuardState {
   quitDialogOpen: boolean;
   shortcutsOpen: boolean;
+  commandCenterOpen: boolean;
   createDialogOpen: boolean;
   pasteConfirmOpen: boolean;
   sidebarModalOpen: boolean;
@@ -11,6 +12,7 @@ export interface WarRoomModalGuardState {
 export function isWarRoomModalGuardActive(state: WarRoomModalGuardState): boolean {
   return state.quitDialogOpen ||
     state.shortcutsOpen ||
+    state.commandCenterOpen ||
     state.createDialogOpen ||
     state.pasteConfirmOpen ||
     state.sidebarModalOpen;

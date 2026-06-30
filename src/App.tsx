@@ -6,6 +6,7 @@ import Sidebar, { CreateWorkspaceDialog, type SidebarWindow } from "@/components
 import SettingsPanel from "@/components/layout/SettingsPanel";
 import QuitGuardDialog from "@/components/layout/QuitGuardDialog";
 import PasteConfirmDialog from "@/components/layout/PasteConfirmDialog";
+import CommandCenter from "@/components/layout/CommandCenter";
 import ShortcutsOverlay from "@/components/layout/ShortcutsOverlay";
 import ZoomSpeedControl from "@/components/layout/ZoomSpeedControl";
 import UsageLimitsCard from "@/components/layout/UsageLimitsCard";
@@ -94,6 +95,7 @@ export default function App() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [quitDialogOpen, setQuitDialogOpen] = useState(false);
   const [isQuitting, setIsQuitting] = useState(false);
+  const [commandCenterOpen, setCommandCenterOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [isWarRoom, setIsWarRoom] = useState(false);
   const [sidebarModalOpen, setSidebarModalOpen] = useState(false);
@@ -1057,6 +1059,7 @@ export default function App() {
   modalOpenRef.current = isWarRoomModalGuardActive({
     quitDialogOpen,
     shortcutsOpen,
+    commandCenterOpen,
     createDialogOpen,
     pasteConfirmOpen: pasteConfirmState !== null,
     sidebarModalOpen,
@@ -1083,6 +1086,20 @@ export default function App() {
           e.preventDefault();
           setShortcutsOpen(false);
         }
+        return;
+      }
+
+      // Cmd+P — command center. Keep Ctrl+P for terminal readline history.
+      if (e.metaKey && !e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setCommandCenterOpen((prev) => !prev);
+        return;
+      }
+
+      // Cmd+R — reset viewport to 100%. Keep Ctrl+R for terminal reverse search.
+      if (e.metaKey && !e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        resetViewport();
         return;
       }
 
@@ -1132,7 +1149,7 @@ export default function App() {
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [addWindow, removeWindow, arrangeWindows]);
+  }, [addWindow, removeWindow, arrangeWindows, resetViewport]);
 
   // ── Sidebar window projection (excludes geometry → stable during drag/resize) ──
   const sidebarWindowsKeyRef = useRef("");
@@ -1248,6 +1265,27 @@ export default function App() {
         onCancel={handlePasteCancel}
         onConfirm={handlePasteConfirm}
       />
+
+      {commandCenterOpen ? (
+        <CommandCenter
+          open={commandCenterOpen}
+          onOpenChange={setCommandCenterOpen}
+          workspaces={workspaces}
+          windows={windows}
+          activeWorkspaceId={activeWorkspaceId}
+          activeWindowId={activeWindowId}
+          isWarRoom={isWarRoom}
+          onAddWindow={addWindow}
+          onCreateWorkspace={() => setCreateDialogOpen(true)}
+          onArrangeWindows={arrangeWindows}
+          onToggleWarRoom={() => setIsWarRoom((prev) => (prev ? false : stateRef.current.workspaces.length > 0))}
+          onShowShortcuts={() => setShortcutsOpen(true)}
+          onResetViewport={resetViewport}
+          onFocusWindow={focusWindowFromSidebar}
+          onSelectWorkspace={switchWorkspace}
+          onOpenFile={openFile}
+        />
+      ) : null}
 
       <QuitGuardDialog
         open={quitDialogOpen}

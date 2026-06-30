@@ -12,8 +12,15 @@ export function handleTerminalShortcut(
   context: TerminalShortcutContext,
 ): boolean {
   const mod = event.metaKey || event.ctrlKey;
+  const commandOnlyGlobal = event.metaKey && (
+    event.key === "p" || event.key === "P" || event.key === "r" || event.key === "R"
+  );
+  const crossPlatformGlobal = mod && (
+    event.key === "?" || event.key === "n" || event.key === "N" || event.key === "w" ||
+    event.key === "W" || event.key === "A" || event.key === "m" || event.key === "M"
+  );
 
-  if (mod && (event.key === "v" || event.key === "k" || event.key === "?" || event.key === "n" || event.key === "N" || event.key === "w" || event.key === "W" || event.key === "A" || event.key === "m" || event.key === "M")) {
+  if ((mod && (event.key === "v" || event.key === "k")) || commandOnlyGlobal || crossPlatformGlobal) {
     if (event.type === "keyup") return false;
   }
 
@@ -47,7 +54,7 @@ export function handleTerminalShortcut(
   }
 
   // Global shortcuts — let bubble to document handler
-  if (mod && (event.key === "?" || event.key === "n" || event.key === "N" || event.key === "w" || event.key === "W" || event.key === "A" || event.key === "m" || event.key === "M")) {
+  if (commandOnlyGlobal || crossPlatformGlobal) {
     return false;
   }
 

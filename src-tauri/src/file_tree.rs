@@ -43,6 +43,14 @@ pub struct GitStatusResult {
     pub deletions: u32,
 }
 
+#[derive(Serialize, Clone)]
+pub struct WorkspaceFileSearchEntry {
+    pub name: String,
+    pub path: String,
+    pub relative_path: String,
+    pub is_dir: bool,
+}
+
 // ── Watcher state (with ref counting) ──
 
 struct WatcherEntry {
@@ -211,6 +219,125 @@ pub fn read_directory(path: &str, show_ignored: bool) -> Result<Vec<FileEntry>, 
     });
 
     Ok(entries)
+}
+
+pub fn search_workspace_files(
+    root_path: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<WorkspaceFileSearchEntry>, String> {
+    let terms = normalize_search_terms(query);
+    if terms.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let canonical_root =
+        std::fs::canonicalize(root_path).map_err(|e| format!("Cannot resolve root path: {e}"))?;
+    if !canonical_root.is_dir() {
+        return Err(format!("Not a directory: {root_path}"));
+    }
+
+    let mut builder = ignore::WalkBuilder::new(&canonical_root);
+    builder
+        .hidden(false)
+        .follow_links(false)
+        .filter_entry(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_none_or(|name| !ALWAYS_EXCLUDE.contains(&name))
+        });
+
+    let mut matches: Vec<(u32, WorkspaceFileSearchEntry)> = Vec::new();
+    let max_results = limit.min(100);
+
+    for result in builder.build() {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let file_type = match entry.file_type() {
+            Some(file_type) => file_type,
+            None => continue,
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+        let relative = match path.strip_prefix(&canonical_root) {
+            Ok(relative) => relative,
+            Err(_) => continue,
+        };
+        let relative_path = relative.to_string_lossy().replace('\\', "/");
+        if relative_path.is_empty() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| relative_path.clone());
+
+        let haystack = format!("{} {}", name.to_lowercase(), relative_path.to_lowercase());
+        if !terms.iter().all(|term| haystack.contains(term)) {
+            continue;
+        }
+
+        let candidate = (
+            file_search_score(&name, &relative_path, &terms),
+            WorkspaceFileSearchEntry {
+                name,
+                path: path.to_string_lossy().to_string(),
+                relative_path,
+                is_dir: false,
+            },
+        );
+        let insert_at = matches
+            .binary_search_by(|existing| compare_file_search_matches(existing, &candidate))
+            .unwrap_or_else(|index| index);
+        if insert_at < max_results {
+            matches.insert(insert_at, candidate);
+            if matches.len() > max_results {
+                matches.pop();
+            }
+        }
+    }
+
+    Ok(matches.into_iter().map(|(_, entry)| entry).collect())
+}
+
+fn compare_file_search_matches(
+    a: &(u32, WorkspaceFileSearchEntry),
+    b: &(u32, WorkspaceFileSearchEntry),
+) -> std::cmp::Ordering {
+    b.0.cmp(&a.0)
+        .then_with(|| a.1.relative_path.cmp(&b.1.relative_path))
+}
+
+fn normalize_search_terms(query: &str) -> Vec<String> {
+    query
+        .split_whitespace()
+        .map(|term| term.to_lowercase())
+        .filter(|term| !term.is_empty())
+        .collect()
+}
+
+fn file_search_score(name: &str, relative_path: &str, terms: &[String]) -> u32 {
+    let joined = terms.join(" ");
+    let name = name.to_lowercase();
+    let relative_path = relative_path.to_lowercase();
+
+    if name == joined {
+        100
+    } else if name.starts_with(&joined) {
+        85
+    } else if name.contains(&joined) {
+        70
+    } else if relative_path.contains(&joined) {
+        55
+    } else {
+        40
+    }
 }
 
 fn build_gitignore(dir_path: &Path) -> Option<ignore::gitignore::Gitignore> {
@@ -1180,6 +1307,92 @@ mod tests {
             !names.contains(&"node_modules"),
             "node_modules/ should be filtered"
         );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    // ── search_workspace_files ────────────────────────────────────────────────
+
+    #[test]
+    fn search_workspace_files_matches_names_and_relative_paths() {
+        let root = make_temp_dir("swf_match");
+        fs::create_dir_all(root.join("src/components")).expect("mkdir components");
+        fs::write(root.join("src/App.tsx"), b"export default function App() {}\n")
+            .expect("write app");
+        fs::write(root.join("src/components/CommandCenter.tsx"), b"").expect("write command center");
+        fs::write(root.join("README.md"), b"Command center docs\n").expect("write readme");
+
+        let app_results =
+            search_workspace_files(&root.to_string_lossy(), "app", 20).expect("search app");
+        assert_eq!(app_results.len(), 1);
+        assert_eq!(app_results[0].name, "App.tsx");
+        assert_eq!(app_results[0].relative_path, "src/App.tsx");
+        assert!(!app_results[0].is_dir);
+
+        let path_results =
+            search_workspace_files(&root.to_string_lossy(), "components command", 20)
+                .expect("search path fragments");
+        assert_eq!(path_results.len(), 1);
+        assert_eq!(
+            path_results[0].relative_path,
+            "src/components/CommandCenter.tsx"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn search_workspace_files_respects_gitignore_and_hard_excludes() {
+        let root = make_git_root("swf_ignore", "dist/\n*.log\n");
+        fs::create_dir_all(root.join("dist")).expect("mkdir dist");
+        fs::write(root.join("dist/generated.ts"), b"").expect("write generated");
+        fs::write(root.join("debug.log"), b"").expect("write log");
+        fs::create_dir(root.join(".git").join("objects")).expect("mkdir .git objects");
+        fs::write(root.join(".git").join("config"), b"").expect("write git config");
+        fs::write(root.join("visible.ts"), b"").expect("write visible");
+
+        let results =
+            search_workspace_files(&root.to_string_lossy(), "ts", 20).expect("search files");
+        let paths: Vec<&str> = results
+            .iter()
+            .map(|entry| entry.relative_path.as_str())
+            .collect();
+
+        assert_eq!(paths, vec!["visible.ts"]);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn search_workspace_files_clamps_empty_queries_and_limits_results() {
+        let root = make_temp_dir("swf_limit");
+        for index in 0..5 {
+            fs::write(root.join(format!("match-{index}.ts")), b"").expect("write file");
+        }
+
+        let empty = search_workspace_files(&root.to_string_lossy(), "  ", 20)
+            .expect("search empty query");
+        assert!(empty.is_empty());
+
+        let limited = search_workspace_files(&root.to_string_lossy(), "match", 2)
+            .expect("search limited");
+        assert_eq!(limited.len(), 2);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn search_workspace_files_keeps_best_matches_when_limited() {
+        let root = make_temp_dir("swf_top_k");
+        fs::create_dir_all(root.join("docs")).expect("mkdir docs");
+        fs::write(root.join("docs/readme-app.md"), b"").expect("write readme app");
+        fs::write(root.join("app.tsx"), b"").expect("write app");
+
+        let results =
+            search_workspace_files(&root.to_string_lossy(), "app", 1).expect("search top k");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].relative_path, "app.tsx");
 
         fs::remove_dir_all(&root).ok();
     }
