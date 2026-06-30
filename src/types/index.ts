@@ -102,6 +102,13 @@ export interface GitStatusResult {
   deletions: number;
 }
 
+export interface WorkspaceFileSearchEntry {
+  name: string;
+  path: string;
+  relative_path: string;
+  is_dir: boolean;
+}
+
 export interface DiffLine {
   origin: "add" | "delete" | "context";
   old_lineno: number | null;

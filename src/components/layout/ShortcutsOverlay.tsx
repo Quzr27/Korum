@@ -32,6 +32,8 @@ const SHORTCUT_GROUPS = [
   {
     label: "General",
     shortcuts: [
+      { keys: ["\u2318", "P"], description: "Command center" },
+      { keys: ["\u2318", "R"], description: "Reset viewport" },
       { keys: ["\u2318", "N"], description: "New terminal" },
       { keys: ["\u2318", "\u21E7", "N"], description: "New note" },
       { keys: ["\u2318", "W"], description: "Close active window" },
