@@ -33,6 +33,7 @@ import {
   Target01Icon,
   Wrench01Icon,
   Note01Icon,
+  CameraIcon,
   GridViewIcon,
   EyeIcon,
   ViewOffSlashIcon,
@@ -64,15 +65,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuGroup,
   ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { isPathInsideRoot } from "@/lib/file-tree-reveal";
@@ -517,11 +515,12 @@ interface SidebarProps {
   onCreateDialogChange: (open: boolean) => void;
   onModalOpenChange?: (open: boolean) => void;
   onFocusWindow: (id: string) => void;
-  onAddNote: () => void;
+  onAddWindowToWorkspace: (type: Extract<WindowKind, "terminal" | "note">, workspaceId: string) => void;
+  onOpenSnapshotExport: () => void;
   onSelectWorkspace: (id: string) => void;
   onUpdateWorkspace: (id: string, updates: Partial<Omit<Workspace, "id">>) => void;
   onDeleteWorkspace: (id: string) => void;
-  onArrangeWindows: () => void;
+  onArrangeWindows: (workspaceId?: string) => void;
   onRenameWindow: (id: string, title: string) => void;
   onRemoveWindow: (id: string) => void;
   onOpenFile: (filePath: string, workspaceId: string) => void;
@@ -531,7 +530,7 @@ export default function Sidebar({
   windows, workspaces, activeWorkspaceId, activeWindowId,
   onCreateDialogChange,
   onModalOpenChange,
-  onFocusWindow, onAddNote, onSelectWorkspace,
+  onFocusWindow, onAddWindowToWorkspace, onOpenSnapshotExport, onSelectWorkspace,
   onUpdateWorkspace, onDeleteWorkspace,
   onArrangeWindows, onRenameWindow, onRemoveWindow,
   onOpenFile,
@@ -553,7 +552,6 @@ export default function Sidebar({
   const [renameValue, setRenameValue] = useState("");
   // Track which workspaces are collapsed — expanded by default
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
-  const [openMenuWsId, setOpenMenuWsId] = useState<string | null>(null);
 
   const [editName, setEditName] = useState("");
   const [editColor, setEditColor] = useState<WorkspaceColor>("default");
@@ -613,7 +611,6 @@ export default function Sidebar({
     if (!deleteTarget) return;
     onDeleteWorkspace(deleteTarget.id);
     setDeleteTarget(null);
-    setOpenMenuWsId(null);
   }, [deleteTarget, onDeleteWorkspace]);
 
   const startRename = useCallback((w: SidebarWindow) => {
@@ -632,7 +629,6 @@ export default function Sidebar({
       setDeleteTarget(ws);
     } else {
       onDeleteWorkspace(ws.id);
-      setOpenMenuWsId(null);
     }
   }, [windows, onDeleteWorkspace]);
 
@@ -645,11 +641,35 @@ export default function Sidebar({
     });
   }, []);
 
-  const handleWorkspaceClick = useCallback((wsId: string) => {
+  const activateWorkspace = useCallback((wsId: string) => {
     onSelectWorkspace(wsId);
     setCollapsedIds((prev) => { const next = new Set(prev); next.delete(wsId); return next; });
-    setOpenMenuWsId(null);
   }, [onSelectWorkspace]);
+
+  const handleWorkspaceClick = useCallback((wsId: string) => {
+    activateWorkspace(wsId);
+  }, [activateWorkspace]);
+
+  const addWorkspaceWindow = useCallback((type: Extract<WindowKind, "terminal" | "note">, wsId: string) => {
+    activateWorkspace(wsId);
+    onAddWindowToWorkspace(type, wsId);
+  }, [activateWorkspace, onAddWindowToWorkspace]);
+
+  const arrangeWorkspaceWindows = useCallback((wsId: string) => {
+    activateWorkspace(wsId);
+    onArrangeWindows(wsId);
+  }, [activateWorkspace, onArrangeWindows]);
+
+  const toggleFilePanelForWorkspace = useCallback((ws: Workspace) => {
+    if (!ws.rootPath) return;
+    activateWorkspace(ws.id);
+    setFileDrawerOpenByWorkspaceId((prev) => ({ ...prev, [ws.id]: !prev[ws.id] }));
+  }, [activateWorkspace]);
+
+  const openSnapshotForWorkspace = useCallback((wsId: string) => {
+    activateWorkspace(wsId);
+    onOpenSnapshotExport();
+  }, [activateWorkspace, onOpenSnapshotExport]);
 
   const toggleFilePanel = useCallback(() => {
     if (!activeWs?.rootPath) return;
@@ -752,24 +772,27 @@ export default function Sidebar({
               const filteredNotes = wsWindows.filter((w) => w.type === "note" && w.title.toLowerCase().includes(normalizedQuery));
               const filteredCode = wsWindows.filter((w) => w.type === "code" && w.title.toLowerCase().includes(normalizedQuery));
               const hasItems = filteredTerminals.length > 0 || filteredNotes.length > 0 || filteredCode.length > 0;
+              const wsFilePanelOpen = !!(ws.rootPath && fileDrawerOpenByWorkspaceId[ws.id]);
 
               const color = WORKSPACE_COLORS[ws.color];
               const wsAggregateActivity = aggregateActivity(
                 activities,
                 wsWindows.filter((w) => w.type === "terminal").map((w) => w.id),
               );
-              const workspaceRowReservedWidth = isActive && ws.rootPath ? 72 : 40;
+              const workspaceRowReservedWidth = isActive && ws.rootPath ? 64 : 36;
               return (
                 <div key={ws.id} className="flex flex-col">
                   {/* Workspace row */}
-                  <div
-                    className={cn(
-                      "group/ws flex w-full min-w-0 items-center overflow-hidden rounded-lg transition-colors",
-                      isActive
-                        ? "bg-foreground/[0.055] dark:bg-sidebar-accent"
-                        : "hover:bg-foreground/[0.04] dark:hover:bg-sidebar-accent/50",
-                    )}
-                  >
+                  <ContextMenu>
+                    <ContextMenuTrigger asChild>
+                      <div
+                        className={cn(
+                          "group/ws flex w-full min-w-0 items-center overflow-hidden rounded-lg transition-colors",
+                          isActive
+                            ? "bg-foreground/[0.055] dark:bg-sidebar-accent"
+                            : "hover:bg-foreground/[0.04] dark:hover:bg-sidebar-accent/50",
+                        )}
+                      >
                     {/* Chevron */}
                     <Button
                       type="button"
@@ -818,7 +841,7 @@ export default function Sidebar({
                       <span className="min-w-0 flex-1 truncate text-left">{ws.name}</span>
                     </Button>
 
-                    {/* Right slot: files toggle + count / menu */}
+                    {/* Right slot: files toggle + count */}
                     <div className="mr-0.5 flex shrink-0 items-center gap-1 pl-1">
                       {!isExpanded && <AgentStatusDot activity={wsAggregateActivity} />}
                       {isActive && ws.rootPath && (
@@ -845,57 +868,54 @@ export default function Sidebar({
                         </Button>
                       )}
 
-                      <div className="relative flex items-center justify-center size-7">
-                        <span
-                          className={cn(
-                            "text-[10px] tabular-nums text-muted-foreground/50 transition-opacity pointer-events-none select-none",
-                            "group-hover/ws:opacity-0",
-                            openMenuWsId === ws.id && "opacity-0",
-                          )}
-                        >
-                          {wsWindows.length || null}
-                        </span>
-                        <DropdownMenu onOpenChange={(open) => {
-                          if (open) {
-                            setOpenMenuWsId(ws.id);
-                          } else {
-                            const closingId = ws.id;
-                            setTimeout(() => setOpenMenuWsId((prev) => prev === closingId ? null : prev), 150);
-                          }
-                        }}>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className={cn(
-                                "absolute inset-0 text-muted-foreground/40 hover:bg-transparent",
-                                "opacity-0 pointer-events-none group-hover/ws:opacity-100 group-hover/ws:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto",
-                                openMenuWsId === ws.id && "opacity-100! pointer-events-auto",
-                              )}
-                              aria-label={`${ws.name} options`}
-                            >
-                              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                                <circle cx="4" cy="8" r="1.2" fill="currentColor" />
-                                <circle cx="8" cy="8" r="1.2" fill="currentColor" />
-                                <circle cx="12" cy="8" r="1.2" fill="currentColor" />
-                              </svg>
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => openEdit(ws)}>
-                              <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
-                              Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => requestDelete(ws)}>
-                              <HugeiconsIcon icon={Delete01Icon} data-icon="inline-start" />
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
+                      <span className="flex size-7 items-center justify-center text-[10px] tabular-nums text-muted-foreground/50 pointer-events-none select-none">
+                        {wsWindows.length || null}
+                      </span>
                     </div>
-                  </div>
+                      </div>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent className="workspace-context-menu w-56 text-xs">
+                      <ContextMenuLabel className="truncate text-xs">{ws.name}</ContextMenuLabel>
+                      <ContextMenuGroup>
+                        <ContextMenuItem onSelect={() => addWorkspaceWindow("terminal", ws.id)}>
+                          <HugeiconsIcon icon={HugeTerminalIcon} data-icon="inline-start" />
+                          New Terminal
+                        </ContextMenuItem>
+                        <ContextMenuItem onSelect={() => addWorkspaceWindow("note", ws.id)}>
+                          <HugeiconsIcon icon={Note01Icon} data-icon="inline-start" />
+                          New Note
+                        </ContextMenuItem>
+                      </ContextMenuGroup>
+                      <ContextMenuSeparator />
+                      <ContextMenuGroup>
+                        {ws.rootPath ? (
+                          <ContextMenuItem onSelect={() => toggleFilePanelForWorkspace(ws)}>
+                            <HugeiconsIcon icon={FolderTreeIcon} data-icon="inline-start" />
+                            {wsFilePanelOpen ? "Hide Files" : "Show Files"}
+                          </ContextMenuItem>
+                        ) : null}
+                        <ContextMenuItem onSelect={() => arrangeWorkspaceWindows(ws.id)}>
+                          <HugeiconsIcon icon={GridViewIcon} data-icon="inline-start" />
+                          Arrange Windows
+                        </ContextMenuItem>
+                        <ContextMenuItem onSelect={() => openSnapshotForWorkspace(ws.id)}>
+                          <HugeiconsIcon icon={CameraIcon} data-icon="inline-start" />
+                          Snapshot
+                        </ContextMenuItem>
+                      </ContextMenuGroup>
+                      <ContextMenuSeparator />
+                      <ContextMenuGroup>
+                        <ContextMenuItem onSelect={() => openEdit(ws)}>
+                          <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
+                          Edit Workspace
+                        </ContextMenuItem>
+                        <ContextMenuItem variant="destructive" onSelect={() => requestDelete(ws)}>
+                          <HugeiconsIcon icon={Delete01Icon} data-icon="inline-start" />
+                          Delete Workspace
+                        </ContextMenuItem>
+                      </ContextMenuGroup>
+                    </ContextMenuContent>
+                  </ContextMenu>
 
                   {/* Children — terminals & notes */}
                   {isExpanded && hasItems && (
@@ -969,16 +989,23 @@ export default function Sidebar({
           </Button>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button type="button" variant="ghost" size="sm" className="px-2" onClick={onAddNote} aria-label="Add note">
-                <HugeiconsIcon icon={Note01Icon} size={14} />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="px-2"
+                onClick={onOpenSnapshotExport}
+                aria-label="Open War Room Snapshot export"
+              >
+                <HugeiconsIcon icon={CameraIcon} />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top"><p>New note</p></TooltipContent>
+            <TooltipContent side="top"><p>Snapshot</p></TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button type="button" variant="ghost" size="sm" className="px-2" onClick={onArrangeWindows} aria-label="Arrange windows in grid">
-                <HugeiconsIcon icon={GridViewIcon} size={14} />
+              <Button type="button" variant="ghost" size="sm" className="px-2" onClick={() => onArrangeWindows()} aria-label="Arrange windows in grid">
+                <HugeiconsIcon icon={GridViewIcon} />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top"><p>Arrange in grid</p></TooltipContent>
@@ -1122,7 +1149,7 @@ export default function Sidebar({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" className="text-destructive! **:text-destructive!" onClick={handleDeleteConfirm}>Delete</AlertDialogAction>
+            <AlertDialogAction variant="destructive" onClick={handleDeleteConfirm}>Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

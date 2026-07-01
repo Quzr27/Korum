@@ -760,20 +760,26 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
     >
       <svg width={MINIMAP_W} height={MINIMAP_H} viewBox={`0 0 ${MINIMAP_W} ${MINIMAP_H}`} className="h-full w-full" aria-hidden="true">
         {/* Window rectangles */}
-        {windows.map((w) => (
-          <rect
-            key={w.id}
-            data-minimap-window-id={w.id}
-            data-minimap-window-type={w.type}
-            x={toMiniX(w.x)}
-            y={toMiniY(w.y)}
-            width={w.width * scale}
-            height={w.height * scale}
-            rx={2}
-            className={w.id === activeWindowId ? "fill-primary/45 stroke-primary" : "fill-muted-foreground/25 stroke-muted-foreground/15"}
-            strokeWidth={0.5}
-          />
-        ))}
+        {windows.map((w) => {
+          const rawWidth = w.width * scale;
+          const rawHeight = w.height * scale;
+          const rectWidth = Math.max(2.5, rawWidth);
+          const rectHeight = Math.max(2.5, rawHeight);
+          return (
+            <rect
+              key={w.id}
+              data-minimap-window-id={w.id}
+              data-minimap-window-type={w.type}
+              x={toMiniX(w.x) - (rectWidth - rawWidth) / 2}
+              y={toMiniY(w.y) - (rectHeight - rawHeight) / 2}
+              width={rectWidth}
+              height={rectHeight}
+              rx={2}
+              className={w.id === activeWindowId ? "fill-primary/45 stroke-primary" : "fill-muted-foreground/25 stroke-muted-foreground/15"}
+              strokeWidth={0.5}
+            />
+          );
+        })}
 
         {/* Terminal agent status dots */}
         {windows.filter((w) => w.type === "terminal").map((w) => {
@@ -799,16 +805,19 @@ const Minimap = memo(function Minimap({ windows, activeWindowId, pan, zoom, view
         {vpRect && (
           <g className="pointer-events-none">
             <rect
+              data-minimap-viewport-lens="true"
               x={vpRect.x}
               y={vpRect.y}
               width={vpRect.w}
               height={vpRect.h}
               rx={2.5}
-              className="fill-foreground/5 stroke-foreground/30"
+              fill="none"
+              className="stroke-foreground/35"
               strokeWidth={1}
             />
             {vpBracketPath && (
               <path
+                data-minimap-viewport-brackets="true"
                 d={vpBracketPath}
                 fill="none"
                 className="stroke-foreground/60"

@@ -146,6 +146,7 @@ export default memo(function NoteWindow({ id, window: win, isActive, zoomRef, sn
           ref={windowRef}
           className="window"
           data-window-id={id}
+          data-window-type="note"
           data-active={isActive}
           style={{
             left: win.x,

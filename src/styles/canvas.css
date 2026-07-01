@@ -190,3 +190,128 @@
     0 0 30px color-mix(in oklch, var(--agent-status-working) 12%, transparent),
     0 10px 34px rgba(0, 0, 0, 0.22);
 }
+
+.workspace-context-menu [data-variant="destructive"] {
+  color: var(--destructive) !important;
+}
+
+.workspace-context-menu [data-variant="destructive"] svg {
+  color: var(--destructive) !important;
+}
+
+/* ── Snapshot export capture mode ── */
+.snapshot-capture-mode [data-snapshot-chrome="true"],
+.snapshot-capture-mode .app-titlebar-drag-region,
+.snapshot-capture-mode .window-close,
+.snapshot-capture-mode .resize-edge,
+.snapshot-capture-mode .terminal-demo-start-btn {
+  display: none !important;
+}
+
+.snapshot-capture-mode .canvas-viewport {
+  cursor: default;
+}
+
+.snapshot-capture-mode .window {
+  pointer-events: none;
+}
+
+.snapshot-capture-mode [data-snapshot-sidebar="true"],
+.snapshot-capture-mode [data-snapshot-usage-card="true"] {
+  opacity: 1 !important;
+}
+
+.snapshot-capture-mode .window[data-window-type="terminal"] {
+  overflow: hidden !important;
+  border-radius: calc(var(--radius) * 1.4) !important;
+  background: var(--term-bg, var(--card)) !important;
+  clip-path: inset(0 round calc(var(--radius) * 1.4));
+}
+
+.snapshot-capture-mode .window[data-window-type="terminal"] .window-content {
+  overflow: hidden !important;
+  border-bottom-right-radius: calc(var(--radius) * 1.4);
+  border-bottom-left-radius: calc(var(--radius) * 1.4);
+  background: var(--term-bg, var(--card)) !important;
+}
+
+.snapshot-capture-mode *,
+.snapshot-capture-mode *::before,
+.snapshot-capture-mode *::after {
+  animation-duration: 0s !important;
+  transition-duration: 0s !important;
+  scrollbar-width: none !important;
+}
+
+.snapshot-capture-mode *::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+}
+
+.snapshot-capture-mode .window[data-window-type="terminal"] .xterm-viewport,
+.snapshot-capture-mode .window[data-window-type="terminal"] .xterm-screen,
+.snapshot-capture-mode .window[data-window-type="terminal"] .xterm,
+.snapshot-capture-mode .window[data-window-type="terminal"] .terminal-container {
+  overflow: hidden !important;
+  background: var(--term-bg, var(--card)) !important;
+}
+
+.snapshot-capture-mode .window[data-window-type="terminal"] .xterm,
+.snapshot-capture-mode .window[data-window-type="terminal"] .xterm-viewport,
+.snapshot-capture-mode .window[data-window-type="terminal"] .terminal-container,
+.snapshot-capture-mode .window[data-window-type="terminal"] .terminal-preview,
+.snapshot-capture-mode .window[data-window-type="terminal"] .terminal-pending-overlay,
+.snapshot-capture-mode .window[data-window-type="terminal"] .terminal-error-overlay {
+  border-bottom-right-radius: calc(var(--radius) * 1.4);
+  border-bottom-left-radius: calc(var(--radius) * 1.4);
+}
+
+.snapshot-capture-mode .canvas-minimap {
+  right: 1rem;
+  bottom: 1rem;
+  width: 176px;
+  height: 110px;
+  background: color-mix(in oklch, var(--card) 72%, transparent);
+  border-color: color-mix(in oklch, var(--foreground) 22%, var(--border));
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent),
+    0 18px 46px rgba(0, 0, 0, 0.26);
+}
+
+.snapshot-capture-mode .canvas-minimap [data-minimap-window-id] {
+  fill: color-mix(in oklch, var(--foreground) 36%, transparent);
+  stroke: color-mix(in oklch, var(--foreground) 62%, transparent);
+  stroke-width: 1.25px;
+  vector-effect: non-scaling-stroke;
+}
+
+.snapshot-capture-mode .canvas-minimap [data-minimap-window-type="terminal"] {
+  fill: color-mix(in oklch, var(--agent-status-working) 42%, transparent);
+  stroke: color-mix(in oklch, var(--agent-status-working) 72%, transparent);
+}
+
+.snapshot-capture-mode .canvas-minimap [data-minimap-status-dot-id] {
+  fill: var(--agent-status-working);
+  stroke: color-mix(in oklch, var(--background) 80%, transparent);
+  stroke-width: 1.25px;
+}
+
+.snapshot-capture-mode .canvas-minimap [data-minimap-viewport-lens] {
+  fill: none;
+  stroke: color-mix(in oklch, var(--foreground) 70%, transparent);
+  stroke-width: 1.25px;
+  vector-effect: non-scaling-stroke;
+}
+
+.snapshot-capture-mode .canvas-minimap [data-minimap-viewport-brackets] {
+  stroke: color-mix(in oklch, var(--foreground) 82%, transparent);
+  stroke-width: 1.4px;
+  vector-effect: non-scaling-stroke;
+}
+
+.snapshot-hide-minimap .canvas-minimap,
+.snapshot-hide-usage-card [data-snapshot-usage-card="true"],
+.snapshot-hide-sidebar [data-snapshot-sidebar="true"] {
+  display: none !important;
+}

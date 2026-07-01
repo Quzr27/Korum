@@ -3,6 +3,7 @@ use crate::file_tree::FileWatcherState;
 use crate::pty::PtyState;
 use crate::quit_guard::QuitGuardState;
 use serde::Serialize;
+use std::path::PathBuf;
 use std::process::Command;
 use tauri::ipc::{Channel, Response};
 use tauri::State;
@@ -150,6 +151,20 @@ pub fn open_external_url(url: String) -> Result<(), String> {
         .spawn()
         .map_err(|err| format!("Failed to open URL: {err}"))?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn save_snapshot_png(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::snapshot_export::save_snapshot_png_bytes(&PathBuf::from(path), &bytes)
+    })
+    .await
+    .map_err(|e| format!("save_snapshot_png task failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn reveal_snapshot_path(path: String) -> Result<(), String> {
+    crate::snapshot_export::reveal_path(&PathBuf::from(path))
 }
 
 // ── Shell detection ──
