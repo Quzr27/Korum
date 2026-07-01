@@ -10,6 +10,7 @@ import CommandCenter from "@/components/layout/CommandCenter";
 import ShortcutsOverlay from "@/components/layout/ShortcutsOverlay";
 import ZoomSpeedControl from "@/components/layout/ZoomSpeedControl";
 import UsageLimitsCard from "@/components/layout/UsageLimitsCard";
+import SnapshotExportDialog from "@/components/layout/SnapshotExportDialog";
 import Canvas from "@/components/canvas/Canvas";
 import EmptyCanvasState from "@/components/canvas/EmptyCanvasState";
 import { persistState, loadPersistedState } from "@/lib/persistence";
@@ -99,9 +100,11 @@ export default function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [isWarRoom, setIsWarRoom] = useState(false);
   const [sidebarModalOpen, setSidebarModalOpen] = useState(false);
+  const [snapshotExportOpen, setSnapshotExportOpen] = useState(false);
   const [settingsDismissVersion, setSettingsDismissVersion] = useState(0);
   const [pasteConfirmState, setPasteConfirmState] = useState<PasteRequest | null>(null);
   const hasWorkspaces = workspaces.length > 0;
+  const snapshotRootRef = useRef<HTMLDivElement | null>(null);
 
   // ── Viewport (per-workspace, lifted from Canvas) ──
   const [pan, setPan] = useState<Point2D>({ x: 0, y: 0 });
@@ -838,8 +841,8 @@ export default function App() {
     setActiveWindowId(id);
   }, []);
 
-  const arrangeWindows = useCallback(() => {
-    const wsId = stateRef.current.activeWorkspaceId;
+  const arrangeWindows = useCallback((forceWorkspaceId?: string) => {
+    const wsId = forceWorkspaceId ?? stateRef.current.activeWorkspaceId;
     if (!wsId) return;
     setWindows((prev) => {
       const wsWindows = prev.filter((w) => w.workspaceId === wsId);
@@ -1054,6 +1057,13 @@ export default function App() {
     }
   }, [focusWindow, switchWorkspace]);
 
+  const getSnapshotCaptureElement = useCallback(() => snapshotRootRef.current, []);
+
+  const activeWorkspaceName = useMemo(
+    () => workspaces.find((workspace) => workspace.id === activeWorkspaceId)?.name ?? "Korum",
+    [activeWorkspaceId, workspaces],
+  );
+
   // ── Global keyboard shortcuts ──
   const modalOpenRef = useRef(false);
   modalOpenRef.current = isWarRoomModalGuardActive({
@@ -1063,6 +1073,7 @@ export default function App() {
     createDialogOpen,
     pasteConfirmOpen: pasteConfirmState !== null,
     sidebarModalOpen,
+    snapshotExportOpen,
   });
   const shortcutsOpenRef = useRef(false);
   shortcutsOpenRef.current = shortcutsOpen;
@@ -1181,7 +1192,11 @@ export default function App() {
   }
 
   return (
-    <div className={`relative h-screen w-screen overflow-hidden${isWarRoom ? " war-room" : ""}`}>
+    <div
+      ref={snapshotRootRef}
+      data-snapshot-root="true"
+      className={`relative h-screen w-screen overflow-hidden${isWarRoom ? " war-room" : ""}`}
+    >
       <div
         className="app-titlebar-drag-region"
         data-tauri-drag-region
@@ -1222,6 +1237,7 @@ export default function App() {
 
       {hasWorkspaces ? (
         <div
+          data-snapshot-sidebar="true"
           aria-hidden={isWarRoom}
           inert={isWarRoom}
           className={isWarRoom ? "pointer-events-none opacity-0" : "opacity-100"}
@@ -1234,7 +1250,8 @@ export default function App() {
             onCreateDialogChange={setCreateDialogOpen}
             onModalOpenChange={setSidebarModalOpen}
             onFocusWindow={focusWindowFromSidebar}
-            onAddNote={() => addWindow("note")}
+            onAddWindowToWorkspace={(type, workspaceId) => addWindow(type, workspaceId)}
+            onOpenSnapshotExport={() => setSnapshotExportOpen(true)}
             onSelectWorkspace={switchWorkspace}
             onUpdateWorkspace={updateWorkspace}
             onDeleteWorkspace={deleteWorkspace}
@@ -1266,6 +1283,13 @@ export default function App() {
         onConfirm={handlePasteConfirm}
       />
 
+      <SnapshotExportDialog
+        open={snapshotExportOpen}
+        onOpenChange={setSnapshotExportOpen}
+        workspaceName={activeWorkspaceName}
+        getCaptureElement={getSnapshotCaptureElement}
+      />
+
       {commandCenterOpen ? (
         <CommandCenter
           open={commandCenterOpen}
@@ -1279,6 +1303,7 @@ export default function App() {
           onCreateWorkspace={() => setCreateDialogOpen(true)}
           onArrangeWindows={arrangeWindows}
           onToggleWarRoom={() => setIsWarRoom((prev) => (prev ? false : stateRef.current.workspaces.length > 0))}
+          onOpenSnapshotExport={() => setSnapshotExportOpen(true)}
           onShowShortcuts={() => setShortcutsOpen(true)}
           onResetViewport={resetViewport}
           onFocusWindow={focusWindowFromSidebar}
@@ -1301,6 +1326,7 @@ export default function App() {
 
       {hasWorkspaces ? (
         <div
+          data-snapshot-usage-card="true"
           aria-hidden={isWarRoom}
           inert={isWarRoom}
           className={isWarRoom ? "pointer-events-none opacity-0" : "opacity-100"}
@@ -1311,6 +1337,7 @@ export default function App() {
 
       {hasWorkspaces ? (
         <div
+          data-snapshot-chrome="true"
           aria-hidden={isWarRoom}
           inert={isWarRoom}
           className={`fixed bottom-3 right-3 z-40 grid w-40 grid-cols-3 gap-1 ${isWarRoom ? "pointer-events-none opacity-0" : "opacity-100"}`}

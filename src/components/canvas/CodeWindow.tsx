@@ -884,6 +884,7 @@ export default memo(function CodeWindow({
           ref={windowRef}
           className="window"
           data-window-id={id}
+          data-window-type="code"
           data-active={isActive}
           style={{
             left: win.x,

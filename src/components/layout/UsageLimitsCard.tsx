@@ -201,6 +201,7 @@ export default function UsageLimitsCard() {
     <Card
       role="status"
       aria-label="Usage limits"
+      data-snapshot-usage-card="true"
       size="sm"
       className="app-chrome-top glass-subtle fixed right-3 z-40 w-44 select-none border-none! gap-2.5 rounded-xl py-2.5 shadow-lg shadow-black/8"
     >

@@ -51,4 +51,16 @@ describe("war-room shortcut guard", () => {
       sidebarModalOpen: false,
     })).toBe(true);
   });
+
+  it("treats the snapshot export dialog as a modal guard", () => {
+    expect(isWarRoomModalGuardActive({
+      quitDialogOpen: false,
+      shortcutsOpen: false,
+      commandCenterOpen: false,
+      createDialogOpen: false,
+      pasteConfirmOpen: false,
+      sidebarModalOpen: false,
+      snapshotExportOpen: true,
+    })).toBe(true);
+  });
 });

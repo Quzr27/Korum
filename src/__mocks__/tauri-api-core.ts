@@ -1,5 +1,6 @@
 // Stub for @tauri-apps/api/core used in tests
 const invokeResults = new Map<string, unknown>();
+const invokeCalls: Array<{ command: string; args?: Record<string, unknown> }> = [];
 
 export function __setInvokeResult(command: string, result: unknown) {
   invokeResults.set(command, result);
@@ -7,9 +8,15 @@ export function __setInvokeResult(command: string, result: unknown) {
 
 export function __clearInvokeResults() {
   invokeResults.clear();
+  invokeCalls.length = 0;
 }
 
-export async function invoke<T>(command: string, _args?: Record<string, unknown>): Promise<T> {
+export function __getInvokeCalls() {
+  return [...invokeCalls];
+}
+
+export async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  invokeCalls.push({ command, args });
   if (invokeResults.has(command)) {
     return invokeResults.get(command) as T;
   }

@@ -9,6 +9,7 @@ import {
   GridViewIcon,
   KeyboardIcon,
   Note01Icon,
+  CameraIcon,
   Search01Icon,
   Target01Icon,
   TerminalIcon,
@@ -53,6 +54,7 @@ interface CommandCenterProps {
   onCreateWorkspace: () => void;
   onArrangeWindows: () => void;
   onToggleWarRoom: () => void;
+  onOpenSnapshotExport: () => void;
   onShowShortcuts: () => void;
   onResetViewport: () => void;
   onFocusWindow: (id: string) => void;
@@ -106,6 +108,7 @@ export default function CommandCenter({
   onCreateWorkspace,
   onArrangeWindows,
   onToggleWarRoom,
+  onOpenSnapshotExport,
   onShowShortcuts,
   onResetViewport,
   onFocusWindow,
@@ -234,6 +237,16 @@ export default function CommandCenter({
           accessory: "⌘⇧A",
         },
         {
+          id: "action:snapshot-export",
+          category: "actions",
+          title: "War Room Snapshot",
+          subtitle: "Export a full canvas PNG",
+          keywords: ["share", "export", "screenshot", "snapshot", "png"],
+          icon: CameraIcon,
+          run: onOpenSnapshotExport,
+          priority: 30,
+        },
+        {
           id: "action:war-room",
           category: "actions",
           title: isWarRoom ? "Exit War-room Mode" : "War-room Mode",
@@ -342,6 +355,7 @@ export default function CommandCenter({
     onCreateWorkspace,
     onFocusWindow,
     onOpenFile,
+    onOpenSnapshotExport,
     onResetViewport,
     onSelectWorkspace,
     onShowShortcuts,

@@ -336,6 +336,7 @@ export default memo(function TerminalWindow({
           ref={windowRef}
           className="window"
           data-window-id={id}
+          data-window-type="terminal"
           data-active={isActive}
           style={{
             left: win.x,
