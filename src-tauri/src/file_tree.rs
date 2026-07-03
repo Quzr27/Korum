@@ -44,6 +44,17 @@ pub struct GitStatusResult {
 }
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    pub repo_root: String,
+    pub worktree_root: String,
+    pub branch: Option<String>,
+    pub head_sha: Option<String>,
+    pub is_detached: bool,
+    pub display_name: String,
+}
+
+#[derive(Serialize, Clone)]
 pub struct WorkspaceFileSearchEntry {
     pub name: String,
     pub path: String,
@@ -551,6 +562,101 @@ pub fn get_git_file_status(path: &str, root: &str) -> Result<Option<GitFileStatu
         insertions,
         deletions,
     }))
+}
+
+pub fn get_worktree_info(path: &str) -> Result<Option<WorktreeInfo>, String> {
+    let repo = match git2::Repository::discover(path) {
+        Ok(repo) => repo,
+        Err(_) => return Ok(None),
+    };
+
+    let Some(workdir) = repo.workdir() else {
+        return Ok(None);
+    };
+
+    let worktree_root = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+    let repo_root = repo_root_for_worktree_info(&repo, &worktree_root);
+
+    let head = match repo.head() {
+        Ok(head) => head,
+        Err(_) => {
+            let fallback = worktree_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("worktree")
+                .to_string();
+            return Ok(Some(WorktreeInfo {
+                repo_root: repo_root.to_string_lossy().to_string(),
+                worktree_root: worktree_root.to_string_lossy().to_string(),
+                branch: None,
+                head_sha: None,
+                is_detached: false,
+                display_name: fallback,
+            }));
+        }
+    };
+
+    let branch = if head.is_branch() {
+        head.shorthand().map(ToOwned::to_owned)
+    } else {
+        None
+    };
+    let head_sha = head
+        .target()
+        .or_else(|| head.target_peel())
+        .map(|oid| oid.to_string().chars().take(7).collect::<String>());
+    let is_detached = branch.is_none() && head_sha.is_some();
+    let display_name = branch
+        .clone()
+        .or_else(|| head_sha.clone())
+        .or_else(|| {
+            worktree_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "worktree".to_string());
+
+    Ok(Some(WorktreeInfo {
+        repo_root: repo_root.to_string_lossy().to_string(),
+        worktree_root: worktree_root.to_string_lossy().to_string(),
+        branch,
+        head_sha,
+        is_detached,
+        display_name,
+    }))
+}
+
+fn repo_root_for_worktree_info(repo: &git2::Repository, worktree_root: &Path) -> PathBuf {
+    if repo.is_worktree() {
+        if let Some(common_git_dir) = common_git_dir_for_linked_worktree(repo.path()) {
+            if let Some(root) = common_git_dir.parent() {
+                return std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+            }
+        }
+        return worktree_root.to_path_buf();
+    }
+
+    repo.path()
+        .parent()
+        .map(|path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
+        .unwrap_or_else(|| worktree_root.to_path_buf())
+}
+
+fn common_git_dir_for_linked_worktree(git_dir: &Path) -> Option<PathBuf> {
+    let common_dir = std::fs::read_to_string(git_dir.join("commondir")).ok()?;
+    let common_dir = common_dir.lines().next()?.trim();
+    if common_dir.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(common_dir);
+    let common_git_dir = if path.is_absolute() {
+        path
+    } else {
+        git_dir.join(path)
+    };
+    Some(std::fs::canonicalize(&common_git_dir).unwrap_or(common_git_dir))
 }
 
 /// Count visible (non-excluded) children of a directory.
@@ -1234,6 +1340,129 @@ mod tests {
         assert!(status.is_none());
 
         drop(repo);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn get_worktree_info_reports_current_branch() {
+        let (root, repo) = init_git_repo_with_file("wti_branch", "src/app.rs", "fn main() {}\n");
+        let commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature/worktree-ui", &commit, true)
+            .expect("create branch");
+        drop(commit);
+        repo.set_head("refs/heads/feature/worktree-ui")
+            .expect("set head");
+
+        let info = get_worktree_info(&root.to_string_lossy())
+            .expect("worktree info")
+            .expect("git repo");
+
+        assert_eq!(
+            PathBuf::from(&info.worktree_root),
+            fs::canonicalize(&root).unwrap()
+        );
+        assert_eq!(
+            PathBuf::from(&info.repo_root),
+            fs::canonicalize(&root).unwrap()
+        );
+        assert_eq!(info.branch.as_deref(), Some("feature/worktree-ui"));
+        assert!(!info.is_detached);
+        assert_eq!(info.display_name, "feature/worktree-ui");
+        assert_eq!(info.head_sha.as_deref().map(str::len), Some(7));
+
+        drop(repo);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn get_worktree_info_handles_detached_head() {
+        let (root, repo) = init_git_repo_with_file("wti_detached", "src/app.rs", "fn main() {}\n");
+        let commit = repo.head().unwrap().peel_to_commit().unwrap();
+        let short = commit.id().to_string()[..7].to_string();
+        repo.set_head_detached(commit.id()).expect("detach head");
+        drop(commit);
+
+        let info = get_worktree_info(&root.to_string_lossy())
+            .expect("worktree info")
+            .expect("git repo");
+
+        assert_eq!(info.branch, None);
+        assert!(info.is_detached);
+        assert_eq!(info.head_sha.as_deref(), Some(short.as_str()));
+        assert_eq!(info.display_name, short);
+
+        drop(repo);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn get_worktree_info_accepts_file_paths_inside_repo() {
+        let (root, repo) = init_git_repo_with_file("wti_file_path", "src/app.rs", "fn main() {}\n");
+        let file_path = root.join("src/app.rs");
+
+        let info = get_worktree_info(&file_path.to_string_lossy())
+            .expect("worktree info")
+            .expect("git repo");
+
+        assert_eq!(
+            PathBuf::from(&info.worktree_root),
+            fs::canonicalize(&root).unwrap()
+        );
+        assert_eq!(info.branch.as_deref(), Some("master"));
+
+        drop(repo);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn get_worktree_info_reports_common_repo_root_for_linked_worktrees() {
+        let (root, repo) =
+            init_git_repo_with_file("wti_linked_main", "src/app.rs", "fn main() {}\n");
+        let linked_root = root.with_file_name(format!(
+            "{}-linked",
+            root.file_name().and_then(|name| name.to_str()).unwrap()
+        ));
+        let commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature/linked-worktree", &commit, true)
+            .expect("create linked branch");
+        drop(commit);
+        let reference = repo
+            .find_reference("refs/heads/feature/linked-worktree")
+            .expect("find linked branch");
+        let mut options = git2::WorktreeAddOptions::new();
+        options.reference(Some(&reference));
+        let worktree = repo
+            .worktree("linked-worktree", &linked_root, Some(&options))
+            .expect("create linked worktree");
+
+        let info = get_worktree_info(&linked_root.to_string_lossy())
+            .expect("worktree info")
+            .expect("git repo");
+
+        assert_eq!(
+            PathBuf::from(&info.worktree_root),
+            fs::canonicalize(&linked_root).unwrap()
+        );
+        assert_eq!(
+            PathBuf::from(&info.repo_root),
+            fs::canonicalize(&root).unwrap()
+        );
+        assert_eq!(info.branch.as_deref(), Some("feature/linked-worktree"));
+
+        drop(worktree);
+        drop(reference);
+        drop(repo);
+        fs::remove_dir_all(&linked_root).ok();
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn get_worktree_info_returns_none_outside_git() {
+        let root = make_temp_dir("wti_none");
+
+        let info = get_worktree_info(&root.to_string_lossy()).expect("lookup");
+
+        assert!(info.is_none());
         fs::remove_dir_all(&root).ok();
     }
 

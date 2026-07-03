@@ -22,6 +22,7 @@ const AGENT_PROBE_SCROLLBACK_BYTES: usize = 32_768;
 const RECENT_CODEX_FS_MS: u64 = 2_500;
 const CODEX_SESSION_SCAN_MAX_FILES: usize = 2_048;
 const CODEX_SESSION_SCAN_MAX_DEPTH: usize = 8;
+const PROCESS_CWD_CACHE_TTL_MS: u64 = 2_500;
 
 // Scrollback hysteresis: once an agent is positively detected as working, keep
 // reporting `working` through quiet think-gaps and large tool-output dumps so the
@@ -94,6 +95,8 @@ pub struct AgentStatus {
     pub activity: AgentActivity,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     pub source: AgentStatusSource,
     pub updated_at: u64,
 }
@@ -182,26 +185,47 @@ impl ProcessCommandCache {
 
 /// Per-pid cache for `process_cwd_for_pid`. Resolving a foreground process's
 /// cwd costs a `/usr/sbin/lsof` fork on macOS; at 50 terminals an uncached
-/// per-tick spawn is a ~25 fork/s storm. A long-running agent process
-/// effectively never `chdir`s mid-session, and cwd is only ever the
-/// single-owner *fallback* correlator for Claude (pid is the primary match),
-/// so a pid-lifetime cache is safe; entries evict when the pid disappears.
+/// per-tick spawn is a ~25 fork/s storm. Keep it short-lived so UI worktree
+/// grouping can follow agents that `cd` into another linked worktree.
 #[derive(Default)]
 struct ProcessCwdCache {
-    cwds: HashMap<i32, String>,
+    cwds: HashMap<i32, ProcessCwdCacheEntry>,
+}
+
+struct ProcessCwdCacheEntry {
+    cwd: String,
+    checked_at_ms: u64,
 }
 
 impl ProcessCwdCache {
-    /// Return the cached cwd for `pid`, calling `process_cwd_for_pid` on a
-    /// cache miss and storing the result. Stale entries (pids no longer
-    /// present in the current poll) should be evicted via `retain_pids`.
-    fn get(&mut self, pid: i32) -> Option<String> {
-        if let std::collections::hash_map::Entry::Vacant(e) = self.cwds.entry(pid) {
-            if let Some(cwd) = process_cwd_for_pid(pid) {
-                e.insert(cwd);
+    /// Return the cached cwd for `pid`, refreshing after a short TTL. Stale
+    /// entries whose pids disappear should still be evicted via `retain_pids`.
+    fn get(&mut self, pid: i32, now: u64) -> Option<String> {
+        self.get_with(pid, now, process_cwd_for_pid)
+    }
+
+    fn get_with<F>(&mut self, pid: i32, now: u64, resolve: F) -> Option<String>
+    where
+        F: FnOnce(i32) -> Option<String>,
+    {
+        let should_refresh = self.cwds.get(&pid).is_none_or(|entry| {
+            now.saturating_sub(entry.checked_at_ms) >= PROCESS_CWD_CACHE_TTL_MS
+        });
+
+        if should_refresh {
+            if let Some(cwd) = resolve(pid) {
+                self.cwds.insert(
+                    pid,
+                    ProcessCwdCacheEntry {
+                        cwd,
+                        checked_at_ms: now,
+                    },
+                );
+            } else if let Some(entry) = self.cwds.get_mut(&pid) {
+                entry.checked_at_ms = now;
             }
         }
-        self.cwds.get(&pid).cloned()
+        self.cwds.get(&pid).map(|entry| entry.cwd.clone())
     }
 
     /// Remove cache entries whose pids are not in `active_pids`.
@@ -366,7 +390,11 @@ impl AgentStatusState {
 }
 
 fn same_status_value(a: &AgentStatus, b: &AgentStatus) -> bool {
-    a.kind == b.kind && a.activity == b.activity && a.detail == b.detail && a.source == b.source
+    a.kind == b.kind
+        && a.activity == b.activity
+        && a.detail == b.detail
+        && a.cwd == b.cwd
+        && a.source == b.source
 }
 
 fn now_ms() -> u64 {
@@ -374,6 +402,13 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn uses_process_cwd_probe(kind: &AgentKind) -> bool {
+    matches!(
+        kind,
+        AgentKind::Claude | AgentKind::Codex | AgentKind::Aider
+    )
 }
 
 fn build_agent_statuses(
@@ -405,11 +440,11 @@ fn build_agent_statuses(
             // solely on the `AgentKind::Claude` correlation path, so skip the
             // probe entirely for non-Claude terminals and serve Claude ones
             // from a pid-keyed cache — otherwise 50 terminals fork lsof per tick.
-            let process_cwd = if kind == AgentKind::Claude {
+            let process_cwd = if uses_process_cwd_probe(&kind) {
                 probe
                     .as_ref()
                     .and_then(|probe| probe.foreground_process_group)
-                    .and_then(|pid| cwd_cache.get(pid))
+                    .and_then(|pid| cwd_cache.get(pid, now))
             } else {
                 None
             };
@@ -499,13 +534,14 @@ fn status_from_probe(
         if let Some(record) =
             pgid.and_then(|pgid| correlate_claude_record_by_pid(pgid, claude_records))
         {
+            let cwd = record.cwd.clone().or_else(|| effective_cwd(probe));
             let activity = escalate_claude_activity(
                 record.activity.clone(),
                 probe,
                 probe.cleaned_scrollback.as_deref(),
             );
             return (
-                claude_json_status(probe, &activity, now),
+                claude_json_status(probe, &activity, cwd, now),
                 working_stamp(&activity, now),
             );
         }
@@ -513,13 +549,14 @@ fn status_from_probe(
         // Fall back to cwd correlation only when a single session owns the cwd.
         if let Some(cwd) = effective_cwd(probe) {
             if let Some(record) = correlate_claude_record(&cwd, claude_cwds, claude_records) {
+                let status_cwd = record.cwd.clone().or(Some(cwd));
                 let activity = escalate_claude_activity(
-                    record.activity,
+                    record.activity.clone(),
                     probe,
                     probe.cleaned_scrollback.as_deref(),
                 );
                 return (
-                    claude_json_status(probe, &activity, now),
+                    claude_json_status(probe, &activity, status_cwd, now),
                     working_stamp(&activity, now),
                 );
             }
@@ -533,6 +570,7 @@ fn status_from_probe(
         probe.kind.clone(),
         probe.probe.as_ref(),
         probe.cleaned_scrollback.as_deref(),
+        effective_cwd(probe),
         now,
         prev_working_at,
     );
@@ -547,6 +585,7 @@ fn status_from_probe(
                     kind: AgentKind::Codex,
                     activity,
                     detail: None,
+                    cwd: effective_cwd(probe),
                     source: AgentStatusSource::CodexFs,
                     updated_at: now,
                 },
@@ -557,12 +596,18 @@ fn status_from_probe(
     (fallback, next_working_at)
 }
 
-fn claude_json_status(probe: &StatusProbe, activity: &AgentActivity, now: u64) -> AgentStatus {
+fn claude_json_status(
+    probe: &StatusProbe,
+    activity: &AgentActivity,
+    cwd: Option<String>,
+    now: u64,
+) -> AgentStatus {
     AgentStatus {
         terminal_id: probe.registration.terminal_id.clone(),
         kind: AgentKind::Claude,
         activity: activity.clone(),
         detail: None,
+        cwd,
         source: AgentStatusSource::ClaudeJson,
         updated_at: now,
     }
@@ -613,6 +658,7 @@ fn fallback_scrollback_status(
     kind: AgentKind,
     probe: Option<&PtyAgentProbe>,
     cleaned: Option<&str>,
+    cwd: Option<String>,
     now: u64,
     prev_working_at: Option<u64>,
 ) -> (AgentStatus, Option<u64>) {
@@ -645,6 +691,7 @@ fn fallback_scrollback_status(
             kind,
             activity: verdict.activity,
             detail: None,
+            cwd,
             source,
             updated_at: now,
         },
@@ -1313,6 +1360,58 @@ mod tests {
             AgentKind::Aider
         );
         assert_eq!(kind_from_process_command("/bin/zsh -l"), AgentKind::Unknown);
+    }
+
+    #[test]
+    fn status_value_changes_when_cwd_changes() {
+        let base = AgentStatus {
+            terminal_id: String::from("term-1"),
+            kind: AgentKind::Claude,
+            activity: AgentActivity::Idle,
+            detail: None,
+            source: AgentStatusSource::ClaudeJson,
+            updated_at: 1,
+            cwd: Some(String::from("/repo")),
+        };
+        let changed = AgentStatus {
+            cwd: Some(String::from("/repo-feature")),
+            updated_at: 2,
+            ..base.clone()
+        };
+
+        assert!(!same_status_value(&base, &changed));
+    }
+
+    #[test]
+    fn process_cwd_cache_refreshes_stale_entries() {
+        let mut cache = ProcessCwdCache::default();
+        let mut calls = 0;
+
+        let first = cache.get_with(42, 1_000, |_| {
+            calls += 1;
+            Some(String::from("/repo"))
+        });
+        let fresh = cache.get_with(42, 1_000 + PROCESS_CWD_CACHE_TTL_MS - 1, |_| {
+            calls += 1;
+            Some(String::from("/repo-feature"))
+        });
+        let stale = cache.get_with(42, 1_000 + PROCESS_CWD_CACHE_TTL_MS, |_| {
+            calls += 1;
+            Some(String::from("/repo-feature"))
+        });
+
+        assert_eq!(first.as_deref(), Some("/repo"));
+        assert_eq!(fresh.as_deref(), Some("/repo"));
+        assert_eq!(stale.as_deref(), Some("/repo-feature"));
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn live_process_cwd_is_used_for_detected_agent_kinds() {
+        assert!(uses_process_cwd_probe(&AgentKind::Claude));
+        assert!(uses_process_cwd_probe(&AgentKind::Codex));
+        assert!(uses_process_cwd_probe(&AgentKind::Aider));
+        assert!(!uses_process_cwd_probe(&AgentKind::Unknown));
     }
 
     #[test]
