@@ -42,8 +42,12 @@ import { isWarRoomModalGuardActive, shouldToggleWarRoomShortcut } from "@/lib/wa
 import { startWindowDragFromMouseDown } from "@/lib/window-drag";
 import { createDemoWorkspaceTemplate } from "@/lib/demo-workspace-template";
 import { activateDemoTerminalWindow } from "@/lib/demo-terminal-activation";
+import {
+  getWindowWorktreeLookupPath,
+  shouldRefreshWorktreeInfo,
+} from "@/lib/worktree-refresh";
 import type { PersistedState, ViewportState } from "@/lib/persistence";
-import type { AgentStatus, WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest, CodeViewMode, GitFileStatus } from "@/types";
+import type { AgentStatus, WindowState, Workspace, WindowKind, WindowUpdatable, Point2D, PasteRequest, CodeViewMode, GitFileStatus, WorktreeInfo } from "@/types";
 
 interface AppSnapshot {
   workspaces: Workspace[];
@@ -64,6 +68,7 @@ const TITLEBAR_DRAG_HEIGHT = 40; // keep in sync with --app-titlebar-drag-height
 const GRID_TOP = TITLEBAR_DRAG_HEIGHT + 4; // keep arranged windows just below the top drag strip
 const CODE_WINDOW_WIDTH = 820;
 const CODE_WINDOW_HEIGHT = 600;
+const WORKTREE_INFO_REFRESH_MS = 2_500;
 
 function getOpenFileDrawerWidth(): number {
   return document.querySelector<HTMLElement>('.sidebar-file-drawer[data-state="open"]')
@@ -77,6 +82,17 @@ function getVisibleWorldViewport(pan: Point2D, zoom: number) {
     width: Math.max((window.innerWidth - SIDEBAR_RIGHT_EDGE) / zoom, CODE_WINDOW_WIDTH),
     height: Math.max(window.innerHeight / zoom, CODE_WINDOW_HEIGHT),
   };
+}
+
+function sameWorktreeInfo(a: WorktreeInfo | null | undefined, b: WorktreeInfo | null | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return a === b;
+  return a.repoRoot === b.repoRoot &&
+    a.worktreeRoot === b.worktreeRoot &&
+    a.branch === b.branch &&
+    a.headSha === b.headSha &&
+    a.isDetached === b.isDetached &&
+    a.displayName === b.displayName;
 }
 
 export default function App() {
@@ -103,6 +119,8 @@ export default function App() {
   const [snapshotExportOpen, setSnapshotExportOpen] = useState(false);
   const [settingsDismissVersion, setSettingsDismissVersion] = useState(0);
   const [pasteConfirmState, setPasteConfirmState] = useState<PasteRequest | null>(null);
+  const [worktreeInfoByPath, setWorktreeInfoByPath] = useState<Record<string, WorktreeInfo | null>>({});
+  const [terminalCwdById, setTerminalCwdById] = useState<Record<string, string>>({});
   const hasWorkspaces = workspaces.length > 0;
   const snapshotRootRef = useRef<HTMLDivElement | null>(null);
 
@@ -127,6 +145,9 @@ export default function App() {
   const bootingTerminalIdsRef = useRef(new Set<string>());
   const terminalSnapshotsRef = useRef<Record<string, string>>({});
   const pendingTerminalStartCommandsRef = useRef(new Map<string, string>());
+  const worktreeInfoRequestsRef = useRef<Map<string, Promise<WorktreeInfo | null | undefined>>>(new Map());
+  const worktreeInfoCheckedAtRef = useRef<Record<string, number>>({});
+  const terminalCwdByIdRef = useRef<Record<string, string>>({});
   const codeTargetNonceRef = useRef(0);
   const gitFileStatusRequestsRef = useRef<Map<string, Promise<GitFileStatus | null>>>(new Map());
   const openFileRequestsRef = useRef<Set<string>>(new Set());
@@ -134,6 +155,7 @@ export default function App() {
   // ── State ref (always current, avoids stale closures in save callbacks) ──
   const stateRef = useRef<AppSnapshot>({ workspaces, windows, activeWorkspaceId, pan, zoom });
   stateRef.current = { workspaces, windows, activeWorkspaceId, pan, zoom };
+  terminalCwdByIdRef.current = terminalCwdById;
 
   // ── Pending z-index overrides (avoids direct mutation of state objects) ──
   const pendingZIndexRef = useRef<Map<string, number>>(new Map());
@@ -210,11 +232,31 @@ export default function App() {
   }, []);
 
   const mergeAgentStatuses = useCallback((statuses: AgentStatus[]) => {
+    setTerminalCwdById((prev) => {
+      let next = prev;
+      for (const status of statuses) {
+        if (status.cwd) {
+          if (prev[status.terminalId] === status.cwd) continue;
+          if (next === prev) next = { ...prev };
+          next[status.terminalId] = status.cwd;
+        } else if (Object.prototype.hasOwnProperty.call(prev, status.terminalId)) {
+          if (next === prev) next = { ...prev };
+          delete next[status.terminalId];
+        }
+      }
+      return next;
+    });
     mergeAgentStatusesIntoStore(statuses);
     applyAgentStatusesToDom();
   }, [applyAgentStatusesToDom]);
 
   const clearAgentStatus = useCallback((terminalId: string) => {
+    setTerminalCwdById((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, terminalId)) return prev;
+      const next = { ...prev };
+      delete next[terminalId];
+      return next;
+    });
     removeAgentStatusFromStore(terminalId);
     applyAgentStatusesToDom();
   }, [applyAgentStatusesToDom]);
@@ -339,6 +381,93 @@ export default function App() {
   useEffect(() => {
     applyAgentStatusesToDom();
   }, [activeWorkspaceId, activeWindowId, applyAgentStatusesToDom, pan.x, pan.y, windows, zoom]);
+
+  useEffect(() => {
+    const terminalIds = new Set(
+      windows
+        .filter((window) => window.type === "terminal")
+        .map((window) => window.id),
+    );
+    setTerminalCwdById((prev) => {
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([terminalId]) => terminalIds.has(terminalId)),
+      );
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+  }, [windows]);
+
+  const collectWorktreeLookupPaths = useCallback((): Set<string> => {
+    const { workspaces, windows } = stateRef.current;
+    const workspaceById = new Map(workspaces.map((workspace) => [workspace.id, workspace]));
+    const paths = new Set<string>();
+
+    for (const workspace of workspaces) {
+      if (workspace.rootPath) paths.add(workspace.rootPath);
+    }
+    for (const currentWindow of windows) {
+      const path = getWindowWorktreeLookupPath(
+        currentWindow,
+        workspaceById.get(currentWindow.workspaceId),
+        terminalCwdByIdRef.current,
+      );
+      if (path) paths.add(path);
+    }
+
+    return paths;
+  }, []);
+
+  const refreshWorktreeInfoForPaths = useCallback((paths: ReadonlySet<string>) => {
+    const now = Date.now();
+    const inFlightPaths = new Set(worktreeInfoRequestsRef.current.keys());
+
+    for (const path of paths) {
+      if (!shouldRefreshWorktreeInfo(
+        path,
+        now,
+        worktreeInfoCheckedAtRef.current,
+        inFlightPaths,
+        WORKTREE_INFO_REFRESH_MS,
+      )) {
+        continue;
+      }
+
+      inFlightPaths.add(path);
+
+      const request = invoke<WorktreeInfo | null>("get_worktree_info", { path })
+        .then((info) => {
+          worktreeInfoCheckedAtRef.current[path] = Date.now();
+          setWorktreeInfoByPath((prev) => {
+            if (sameWorktreeInfo(prev[path], info)) return prev;
+            return { ...prev, [path]: info };
+          });
+          return info;
+        })
+        .catch((error) => {
+          console.warn("[worktree] Metadata lookup failed:", error);
+          worktreeInfoCheckedAtRef.current[path] = Date.now();
+          return undefined;
+        })
+        .finally(() => {
+          if (worktreeInfoRequestsRef.current.get(path) === request) {
+            worktreeInfoRequestsRef.current.delete(path);
+          }
+        });
+
+      worktreeInfoRequestsRef.current.set(path, request);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshWorktreeInfoForPaths(collectWorktreeLookupPaths());
+  }, [collectWorktreeLookupPaths, refreshWorktreeInfoForPaths, terminalCwdById, windows, workspaces]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const timer = window.setInterval(() => {
+      refreshWorktreeInfoForPaths(collectWorktreeLookupPaths());
+    }, WORKTREE_INFO_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [collectWorktreeLookupPaths, loaded, refreshWorktreeInfoForPaths]);
 
   const requestQuit = useCallback(() => {
     setQuitDialogOpen(true);
@@ -1165,22 +1294,57 @@ export default function App() {
   // ── Sidebar window projection (excludes geometry → stable during drag/resize) ──
   const sidebarWindowsKeyRef = useRef("");
   const sidebarWindowsCacheRef = useRef<SidebarWindow[]>([]);
+  const getWorktreeForWindow = useCallback((window: WindowState, workspaceById: Map<string, Workspace>) => {
+    const path = getWindowWorktreeLookupPath(
+      window,
+      workspaceById.get(window.workspaceId),
+      terminalCwdById,
+    );
+    return path ? worktreeInfoByPath[path] : undefined;
+  }, [terminalCwdById, worktreeInfoByPath]);
+
   const sidebarWindows = useMemo(() => {
+    const workspaceById = new Map(workspaces.map((workspace) => [workspace.id, workspace]));
     // Build a key from only the fields sidebar cares about
     const key = windows
-      .map((w) => `${w.id}|${w.type}|${w.title}|${w.workspaceId}|${"sourcePath" in w ? w.sourcePath : ""}`)
+      .map((w) => {
+        const worktree = getWorktreeForWindow(w, workspaceById);
+        return [
+          w.id,
+          w.type,
+          w.title,
+          w.workspaceId,
+          "sourcePath" in w ? w.sourcePath : "",
+          worktree?.worktreeRoot ?? "",
+          worktree?.displayName ?? "",
+          worktree?.branch ?? "",
+          worktree?.headSha ?? "",
+        ].join("|");
+      })
       .join("\n");
     if (key === sidebarWindowsKeyRef.current) return sidebarWindowsCacheRef.current;
     sidebarWindowsKeyRef.current = key;
-    sidebarWindowsCacheRef.current = windows.map((w) => ({
-      id: w.id,
-      type: w.type,
-      title: w.title,
-      workspaceId: w.workspaceId,
-      sourcePath: "sourcePath" in w ? w.sourcePath : undefined,
-    }));
+    sidebarWindowsCacheRef.current = windows.map((w) => {
+      const worktree = getWorktreeForWindow(w, workspaceById);
+      return {
+        id: w.id,
+        type: w.type,
+        title: w.title,
+        workspaceId: w.workspaceId,
+        sourcePath: "sourcePath" in w ? w.sourcePath : undefined,
+        worktree,
+      };
+    });
     return sidebarWindowsCacheRef.current;
-  }, [windows]);
+  }, [getWorktreeForWindow, windows, workspaces]);
+
+  const commandCenterWindows = useMemo(() => {
+    const workspaceById = new Map(workspaces.map((workspace) => [workspace.id, workspace]));
+    return windows.map((window) => ({
+      ...window,
+      worktree: getWorktreeForWindow(window, workspaceById),
+    }));
+  }, [getWorktreeForWindow, windows, workspaces]);
 
   // ── Loading screen ──
   if (!loaded) {
@@ -1295,7 +1459,7 @@ export default function App() {
           open={commandCenterOpen}
           onOpenChange={setCommandCenterOpen}
           workspaces={workspaces}
-          windows={windows}
+          windows={commandCenterWindows}
           activeWorkspaceId={activeWorkspaceId}
           activeWindowId={activeWindowId}
           isWarRoom={isWarRoom}

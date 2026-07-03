@@ -77,6 +77,12 @@ import { isPathInsideRoot } from "@/lib/file-tree-reveal";
 import { cn } from "@/lib/utils";
 import { getAgentActivityCssVar } from "@/lib/agent-status";
 import { useAgentActivities } from "@/lib/agent-status-store";
+import {
+  buildWorktreeWindowGroups,
+  hasWorktreeMetadata,
+  matchesWorktreeWindowQuery,
+  type WorktreeGroupWindow,
+} from "@/lib/worktree-groups";
 import type { AgentActivity, Workspace, WorkspaceColor, WorkspaceIconKey, WindowKind } from "@/types";
 import { WORKSPACE_COLORS } from "@/types";
 import FileTree from "@/components/layout/FileTree";
@@ -499,13 +505,7 @@ function WindowItem({
 // ── Main Sidebar ──
 
 /** Lightweight window summary — excludes geometry fields to prevent re-renders on drag/resize. */
-export interface SidebarWindow {
-  id: string;
-  type: WindowKind;
-  title: string;
-  workspaceId: string;
-  sourcePath?: string;
-}
+export type SidebarWindow = WorktreeGroupWindow;
 
 interface SidebarProps {
   windows: SidebarWindow[];
@@ -768,10 +768,17 @@ export default function Sidebar({
               const isActive = ws.id === activeWorkspaceId;
               const isExpanded = !collapsedIds.has(ws.id);
               const wsWindows = windows.filter((w) => w.workspaceId === ws.id);
-              const filteredTerminals = wsWindows.filter((w) => w.type === "terminal" && w.title.toLowerCase().includes(normalizedQuery));
-              const filteredNotes = wsWindows.filter((w) => w.type === "note" && w.title.toLowerCase().includes(normalizedQuery));
-              const filteredCode = wsWindows.filter((w) => w.type === "code" && w.title.toLowerCase().includes(normalizedQuery));
-              const hasItems = filteredTerminals.length > 0 || filteredNotes.length > 0 || filteredCode.length > 0;
+              const matchesQuery = (w: SidebarWindow) => matchesWorktreeWindowQuery(w, normalizedQuery);
+              const filteredChildren = [
+                ...wsWindows.filter((w) => w.type === "terminal" && matchesQuery(w)),
+                ...wsWindows.filter((w) => w.type === "note" && matchesQuery(w)),
+                ...wsWindows.filter((w) => w.type === "code" && matchesQuery(w)),
+              ];
+              const hasItems = filteredChildren.length > 0;
+              const showWorktreeHeaders = hasWorktreeMetadata(filteredChildren);
+              const windowGroups = showWorktreeHeaders
+                ? buildWorktreeWindowGroups(filteredChildren)
+                : [{ key: "all", label: "", worktree: null, windows: filteredChildren }];
               const wsFilePanelOpen = !!(ws.rootPath && fileDrawerOpenByWorkspaceId[ws.id]);
 
               const color = WORKSPACE_COLORS[ws.color];
@@ -780,6 +787,32 @@ export default function Sidebar({
                 wsWindows.filter((w) => w.type === "terminal").map((w) => w.id),
               );
               const workspaceRowReservedWidth = isActive && ws.rootPath ? 64 : 36;
+              const renderWindowItem = (w: SidebarWindow) => {
+                const icon = w.type === "terminal"
+                  ? <HugeiconsIcon icon={HugeTerminalIcon} size={14} className="shrink-0 opacity-50" />
+                  : w.type === "note"
+                    ? <HugeiconsIcon icon={Note01Icon} size={14} className="shrink-0 opacity-50" />
+                    : <HugeiconsIcon icon={CodeIcon} size={14} className="shrink-0 opacity-50" />;
+
+                return (
+                  <WindowItem
+                    key={w.id}
+                    win={w}
+                    isActive={w.id === activeWindowId}
+                    isRenaming={renamingId === w.id}
+                    renameValue={renameValue}
+                    wsColor={color}
+                    activity={w.type === "terminal" ? activities[w.id] : undefined}
+                    icon={icon}
+                    onFocus={() => onFocusWindow(w.id)}
+                    onStartRename={() => startRename(w)}
+                    onRenameChange={setRenameValue}
+                    onCommitRename={commitRename}
+                    onCancelRename={() => setRenamingId(null)}
+                    onDelete={() => onRemoveWindow(w.id)}
+                  />
+                );
+              };
               return (
                 <div key={ws.id} className="flex flex-col">
                   {/* Workspace row */}
@@ -917,60 +950,22 @@ export default function Sidebar({
                     </ContextMenuContent>
                   </ContextMenu>
 
-                  {/* Children — terminals & notes */}
+                  {/* Children — terminals, notes, and code windows */}
                   {isExpanded && hasItems && (
                     <div className="flex flex-col gap-0.5 mt-0.5 mb-1.5">
-                      {filteredTerminals.map((w) => (
-                        <WindowItem
-                          key={w.id}
-                          win={w}
-                          isActive={w.id === activeWindowId}
-                          isRenaming={renamingId === w.id}
-                          renameValue={renameValue}
-                          wsColor={color}
-                          activity={activities[w.id]}
-                          icon={<HugeiconsIcon icon={HugeTerminalIcon} size={14} className="shrink-0 opacity-50" />}
-                          onFocus={() => onFocusWindow(w.id)}
-                          onStartRename={() => startRename(w)}
-                          onRenameChange={setRenameValue}
-                          onCommitRename={commitRename}
-                          onCancelRename={() => setRenamingId(null)}
-                          onDelete={() => onRemoveWindow(w.id)}
-                        />
-                      ))}
-                      {filteredNotes.map((w) => (
-                        <WindowItem
-                          key={w.id}
-                          win={w}
-                          isActive={w.id === activeWindowId}
-                          isRenaming={renamingId === w.id}
-                          renameValue={renameValue}
-                          wsColor={color}
-                          icon={<HugeiconsIcon icon={Note01Icon} size={14} className="shrink-0 opacity-50" />}
-                          onFocus={() => onFocusWindow(w.id)}
-                          onStartRename={() => startRename(w)}
-                          onRenameChange={setRenameValue}
-                          onCommitRename={commitRename}
-                          onCancelRename={() => setRenamingId(null)}
-                          onDelete={() => onRemoveWindow(w.id)}
-                        />
-                      ))}
-                      {filteredCode.map((w) => (
-                        <WindowItem
-                          key={w.id}
-                          win={w}
-                          isActive={w.id === activeWindowId}
-                          isRenaming={renamingId === w.id}
-                          renameValue={renameValue}
-                          wsColor={color}
-                          icon={<HugeiconsIcon icon={CodeIcon} size={14} className="shrink-0 opacity-50" />}
-                          onFocus={() => onFocusWindow(w.id)}
-                          onStartRename={() => startRename(w)}
-                          onRenameChange={setRenameValue}
-                          onCommitRename={commitRename}
-                          onCancelRename={() => setRenamingId(null)}
-                          onDelete={() => onRemoveWindow(w.id)}
-                        />
+                      {windowGroups.map((group) => (
+                        <div key={group.key} className="flex flex-col gap-0.5">
+                          {showWorktreeHeaders && (
+                            <div className="mt-1 flex items-center gap-1.5 pl-7 pr-2.5 text-[10px] font-medium text-muted-foreground/70">
+                              <HugeiconsIcon icon={GitBranchIcon} size={11} className="shrink-0 opacity-60" />
+                              <span className="min-w-0 flex-1 truncate" title={group.worktree?.worktreeRoot ?? group.label}>
+                                {group.label}
+                              </span>
+                              <span className="tabular-nums text-muted-foreground/45">{group.windows.length}</span>
+                            </div>
+                          )}
+                          {group.windows.map(renderWindowItem)}
+                        </div>
                       ))}
                     </div>
                   )}

@@ -33,20 +33,24 @@ import {
 } from "@/lib/command-center";
 import { getAgentActivityCssVar } from "@/lib/agent-status";
 import { getAgentStatusMap, useAgentActivities } from "@/lib/agent-status-store";
+import { getWorktreeDisplayName } from "@/lib/worktree-groups";
 import { cn } from "@/lib/utils";
 import type {
   AgentActivity,
   Workspace,
   WindowKind,
   WindowState,
+  WorktreeInfo,
   WorkspaceFileSearchEntry,
 } from "@/types";
+
+type CommandCenterWindow = WindowState & { worktree?: WorktreeInfo | null };
 
 interface CommandCenterProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   workspaces: Workspace[];
-  windows: WindowState[];
+  windows: CommandCenterWindow[];
   activeWorkspaceId: string | null;
   activeWindowId: string | null;
   isWarRoom: boolean;
@@ -94,6 +98,10 @@ function activityLabel(activity: AgentActivity): string {
   if (activity === "working") return "Working";
   if (activity === "idle") return "Idle";
   return "Unknown";
+}
+
+function worktreeLabel(window: CommandCenterWindow): string | undefined {
+  return window.worktree ? getWorktreeDisplayName(window.worktree) : undefined;
 }
 
 export default function CommandCenter({
@@ -285,6 +293,7 @@ export default function CommandCenter({
     for (const window of windows) {
       const workspace = workspaceById.get(window.workspaceId);
       const status = window.type === "terminal" ? statusMap.get(window.id) : undefined;
+      const branchLabel = worktreeLabel(window);
       nextItems.push({
         id: `window:${window.id}`,
         category: "windows",
@@ -292,12 +301,18 @@ export default function CommandCenter({
         subtitle: [
           windowKindLabel(window.type),
           workspace?.name,
+          branchLabel,
           window.type === "code" ? window.sourcePath : undefined,
         ].filter(Boolean).join(" · "),
         keywords: [
           window.type,
           workspace?.name ?? "",
           window.type === "code" ? window.sourcePath : "",
+          branchLabel ?? "",
+          window.worktree?.branch ?? "",
+          window.worktree?.displayName ?? "",
+          window.worktree?.worktreeRoot ?? "",
+          window.worktree?.repoRoot ?? "",
           status?.kind ?? "",
           status?.activity ?? "",
           status?.detail ?? "",
@@ -315,12 +330,22 @@ export default function CommandCenter({
       if (activity !== "waiting" && activity !== "working") continue;
       const status = statusMap.get(window.id);
       const workspace = workspaceById.get(window.workspaceId);
+      const branchLabel = worktreeLabel(window);
       nextItems.push({
         id: `agent:${activity}:${window.id}`,
         category: "agents",
         title: activity === "waiting" ? "Jump to Waiting Agent" : "Jump to Working Agent",
-        subtitle: [window.title, workspace?.name, status?.kind].filter(Boolean).join(" · "),
-        keywords: [activity, status?.kind ?? "", status?.detail ?? "", window.title],
+        subtitle: [window.title, workspace?.name, branchLabel, status?.kind].filter(Boolean).join(" · "),
+        keywords: [
+          activity,
+          branchLabel ?? "",
+          window.worktree?.branch ?? "",
+          window.worktree?.displayName ?? "",
+          window.worktree?.worktreeRoot ?? "",
+          status?.kind ?? "",
+          status?.detail ?? "",
+          window.title,
+        ],
         icon: Target01Icon,
         run: () => onFocusWindow(window.id),
         priority: activity === "waiting" ? 40 : 25,

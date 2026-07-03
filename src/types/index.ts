@@ -11,8 +11,18 @@ export interface AgentStatus {
   kind: AgentKind;
   activity: AgentActivity;
   detail?: string;
+  cwd?: string;
   source: AgentStatusSource;
   updatedAt: number;
+}
+
+export interface WorktreeInfo {
+  repoRoot: string;
+  worktreeRoot: string;
+  branch: string | null;
+  headSha: string | null;
+  isDetached: boolean;
+  displayName: string;
 }
 
 export interface BaseWindow {

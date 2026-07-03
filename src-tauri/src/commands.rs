@@ -276,6 +276,15 @@ pub fn get_git_file_status(
 }
 
 #[tauri::command]
+pub async fn get_worktree_info(
+    path: String,
+) -> Result<Option<crate::file_tree::WorktreeInfo>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::file_tree::get_worktree_info(&path))
+        .await
+        .map_err(|e| format!("get_worktree_info task failed: {e}"))?
+}
+
+#[tauri::command]
 pub fn read_file_content(path: String) -> Result<String, String> {
     crate::file_tree::read_file_content(&path)
 }
