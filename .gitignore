@@ -40,8 +40,8 @@ AGENTS.md
 # Landing page (separate static site with independent release copy)
 LP/
 
-# Local research notes
-docs/research/
+# Local docs and research notes
+docs/
 
 # CodeGraph (local code-intelligence index)
 .codegraph/
