@@ -3,6 +3,7 @@ mod claude_usage;
 mod codex_usage;
 mod commands;
 mod file_tree;
+mod layout_package_io;
 mod pty;
 mod quit_guard;
 mod snapshot_export;
@@ -13,11 +14,11 @@ use commands::{
     attach_terminal, confirm_app_exit, create_directory, create_file, create_terminal, delete_path,
     detach_terminal, fetch_claude_usage, fetch_codex_usage, get_agent_statuses, get_file_diff,
     get_git_file_status, get_git_status, get_terminal_preview, get_worktree_info, kill_terminal,
-    load_settings, load_state, open_external_url, pause_terminal_read, read_code_file_content,
-    read_directory, read_file_content, register_agent_terminal, rename_path, resize_terminal,
-    resume_terminal_read, reveal_snapshot_path, save_settings, save_snapshot_png, save_state,
-    search_workspace_files, start_watching, stop_watching, unregister_agent_terminal,
-    write_terminal,
+    load_layout_package, load_settings, load_state, open_external_url, pause_terminal_read,
+    read_code_file_content, read_directory, read_file_content, register_agent_terminal,
+    rename_path, resize_terminal, resume_terminal_read, reveal_snapshot_path,
+    save_layout_package, save_settings, save_snapshot_png, save_state, search_workspace_files,
+    start_watching, stop_watching, unregister_agent_terminal, write_terminal,
 };
 use pty::PtyState;
 use quit_guard::QuitGuardState;
@@ -169,6 +170,8 @@ pub fn run() {
             open_external_url,
             save_snapshot_png,
             reveal_snapshot_path,
+            save_layout_package,
+            load_layout_package,
             fetch_claude_usage,
             fetch_codex_usage,
             save_state,

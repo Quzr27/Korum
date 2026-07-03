@@ -17,4 +17,8 @@ describe("canvas surface CSS", () => {
     expect(meshLayer).toContain("background: var(--canvas-mesh);");
     expect(meshLayer).toContain("opacity: var(--canvas-mesh-opacity);");
   });
+
+  it("does not override shadcn destructive context menu variants from workspace CSS", () => {
+    expect(canvasCss).not.toContain('.workspace-context-menu [data-variant="destructive"]');
+  });
 });

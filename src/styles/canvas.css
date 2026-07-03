@@ -191,14 +191,6 @@
     0 10px 34px rgba(0, 0, 0, 0.22);
 }
 
-.workspace-context-menu [data-variant="destructive"] {
-  color: var(--destructive) !important;
-}
-
-.workspace-context-menu [data-variant="destructive"] svg {
-  color: var(--destructive) !important;
-}
-
 /* ── Snapshot export capture mode ── */
 .snapshot-capture-mode [data-snapshot-chrome="true"],
 .snapshot-capture-mode .app-titlebar-drag-region,
