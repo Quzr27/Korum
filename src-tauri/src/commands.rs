@@ -167,6 +167,24 @@ pub fn reveal_snapshot_path(path: String) -> Result<(), String> {
     crate::snapshot_export::reveal_path(&PathBuf::from(path))
 }
 
+#[tauri::command]
+pub async fn save_layout_package(path: String, text: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::layout_package_io::save_layout_package_text(&PathBuf::from(path), &text)
+    })
+    .await
+    .map_err(|e| format!("save_layout_package task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn load_layout_package(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::layout_package_io::load_layout_package_text(&PathBuf::from(path))
+    })
+    .await
+    .map_err(|e| format!("load_layout_package task failed: {e}"))?
+}
+
 // ── Shell detection ──
 
 fn get_default_shell() -> String {

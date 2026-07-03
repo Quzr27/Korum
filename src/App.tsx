@@ -11,6 +11,7 @@ import ShortcutsOverlay from "@/components/layout/ShortcutsOverlay";
 import ZoomSpeedControl from "@/components/layout/ZoomSpeedControl";
 import UsageLimitsCard from "@/components/layout/UsageLimitsCard";
 import SnapshotExportDialog from "@/components/layout/SnapshotExportDialog";
+import LayoutPackageDialog from "@/components/layout/LayoutPackageDialog";
 import Canvas from "@/components/canvas/Canvas";
 import EmptyCanvasState from "@/components/canvas/EmptyCanvasState";
 import { persistState, loadPersistedState } from "@/lib/persistence";
@@ -42,6 +43,14 @@ import { isWarRoomModalGuardActive, shouldToggleWarRoomShortcut } from "@/lib/wa
 import { startWindowDragFromMouseDown } from "@/lib/window-drag";
 import { createDemoWorkspaceTemplate } from "@/lib/demo-workspace-template";
 import { activateDemoTerminalWindow } from "@/lib/demo-terminal-activation";
+import {
+  buildImportedKorumLayout,
+  buildImportedLayout,
+  createKorumLayoutPackage,
+  createLayoutPackage,
+  type LayoutPackage,
+  type LayoutPackageScope,
+} from "@/lib/layout-package";
 import {
   getWindowWorktreeLookupPath,
   shouldRefreshWorktreeInfo,
@@ -117,6 +126,9 @@ export default function App() {
   const [isWarRoom, setIsWarRoom] = useState(false);
   const [sidebarModalOpen, setSidebarModalOpen] = useState(false);
   const [snapshotExportOpen, setSnapshotExportOpen] = useState(false);
+  const [layoutPackageOpen, setLayoutPackageOpen] = useState(false);
+  const [layoutPackageWorkspaceId, setLayoutPackageWorkspaceId] = useState<string | null>(null);
+  const [layoutPackageInitialScope, setLayoutPackageInitialScope] = useState<LayoutPackageScope>("korum");
   const [settingsDismissVersion, setSettingsDismissVersion] = useState(0);
   const [pasteConfirmState, setPasteConfirmState] = useState<PasteRequest | null>(null);
   const [worktreeInfoByPath, setWorktreeInfoByPath] = useState<Record<string, WorktreeInfo | null>>({});
@@ -1193,6 +1205,134 @@ export default function App() {
     [activeWorkspaceId, workspaces],
   );
 
+  const layoutPackageWorkspace = useMemo(() => {
+    const workspaceId = layoutPackageWorkspaceId ?? activeWorkspaceId;
+    return workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
+  }, [activeWorkspaceId, layoutPackageWorkspaceId, workspaces]);
+
+  const layoutPackageWorkspaceWindowCount = useMemo(() => {
+    if (!layoutPackageWorkspace) return 0;
+    return windows.filter((window) => window.workspaceId === layoutPackageWorkspace.id).length;
+  }, [layoutPackageWorkspace, windows]);
+
+  const openLayoutPackageDialog = useCallback((workspaceId?: string) => {
+    setLayoutPackageWorkspaceId(workspaceId ?? stateRef.current.activeWorkspaceId);
+    setLayoutPackageInitialScope(workspaceId ? "workspace" : "korum");
+    setLayoutPackageOpen(true);
+  }, []);
+
+  const handleLayoutPackageOpenChange = useCallback((open: boolean) => {
+    setLayoutPackageOpen(open);
+    if (!open) setLayoutPackageWorkspaceId(null);
+  }, []);
+
+  const buildLayoutPackage = useCallback((scope: LayoutPackageScope): LayoutPackage | null => {
+    const snapshot = stateRef.current;
+    const viewports = { ...viewportsRef.current };
+    if (snapshot.activeWorkspaceId) {
+      viewports[snapshot.activeWorkspaceId] = {
+        panX: snapshot.pan.x,
+        panY: snapshot.pan.y,
+        zoom: snapshot.zoom,
+      };
+    }
+
+    if (scope === "korum") {
+      if (snapshot.workspaces.length === 0) return null;
+      return createKorumLayoutPackage({
+        workspaces: snapshot.workspaces,
+        windows: snapshot.windows,
+        viewports,
+        activeWorkspaceId: snapshot.activeWorkspaceId,
+        pathMode: "keep",
+      });
+    }
+
+    const workspaceId = layoutPackageWorkspaceId ?? stateRef.current.activeWorkspaceId;
+    if (!workspaceId) return null;
+    const workspace = snapshot.workspaces.find((candidate) => candidate.id === workspaceId);
+    if (!workspace) return null;
+
+    return createLayoutPackage({
+      workspace,
+      windows: snapshot.windows,
+      viewport: viewports[workspaceId] ?? DEFAULT_VIEWPORT,
+      pathMode: "keep",
+    });
+  }, [layoutPackageWorkspaceId]);
+
+  const importLayoutPackage = useCallback((pkg: LayoutPackage) => {
+    if (pkg.scope === "korum") {
+      const imported = buildImportedKorumLayout(pkg, {
+        idFactory: () => crypto.randomUUID(),
+      });
+
+      const { activeWorkspaceId: curId, pan, zoom } = stateRef.current;
+      if (curId) {
+        viewportsRef.current[curId] = { panX: pan.x, panY: pan.y, zoom };
+      }
+      for (const [workspaceId, viewport] of Object.entries(imported.viewports)) {
+        viewportsRef.current[workspaceId] = viewport;
+      }
+
+      const counts = { ...countsRef.current };
+      for (const window of imported.windows) {
+        counts[window.type] += 1;
+        delete terminalSnapshotsRef.current[window.id];
+        pendingTerminalStartCommandsRef.current.delete(window.id);
+        pendingZIndexRef.current.delete(window.id);
+      }
+      countsRef.current = counts;
+      nextZRef.current = Math.max(nextZRef.current, imported.nextZ);
+
+      const activeViewport = imported.activeWorkspaceId
+        ? imported.viewports[imported.activeWorkspaceId] ?? DEFAULT_VIEWPORT
+        : DEFAULT_VIEWPORT;
+      const activeWindow = [...imported.windows]
+        .filter((window) => !imported.activeWorkspaceId || window.workspaceId === imported.activeWorkspaceId)
+        .sort((a, b) => b.zIndex - a.zIndex)[0] ?? null;
+
+      setSettingsDismissVersion((value) => value + 1);
+      setPan({ x: activeViewport.panX, y: activeViewport.panY });
+      setZoom(activeViewport.zoom);
+      setWorkspaces((prev) => [...prev, ...imported.workspaces]);
+      setWindows((prev) => [...prev, ...imported.windows]);
+      setActiveWorkspaceId(imported.activeWorkspaceId);
+      setActiveWindowId(activeWindow?.id ?? null);
+      saveAfterUpdate();
+      return;
+    }
+
+    const imported = buildImportedLayout(pkg, {
+      idFactory: () => crypto.randomUUID(),
+    });
+
+    const { activeWorkspaceId: curId, pan, zoom } = stateRef.current;
+    if (curId) {
+      viewportsRef.current[curId] = { panX: pan.x, panY: pan.y, zoom };
+    }
+    viewportsRef.current[imported.workspace.id] = imported.viewport;
+
+    const counts = { ...countsRef.current };
+    for (const window of imported.windows) {
+      counts[window.type] += 1;
+      delete terminalSnapshotsRef.current[window.id];
+      pendingTerminalStartCommandsRef.current.delete(window.id);
+      pendingZIndexRef.current.delete(window.id);
+    }
+    countsRef.current = counts;
+    nextZRef.current = Math.max(nextZRef.current, imported.nextZ);
+
+    setSettingsDismissVersion((value) => value + 1);
+    setPan({ x: imported.viewport.panX, y: imported.viewport.panY });
+    setZoom(imported.viewport.zoom);
+    setWorkspaces((prev) => [...prev, imported.workspace]);
+    setWindows((prev) => [...prev, ...imported.windows]);
+    setActiveWorkspaceId(imported.workspace.id);
+    setActiveWindowId([...imported.windows].sort((a, b) => b.zIndex - a.zIndex)[0]?.id ?? null);
+    saveAfterUpdate();
+  }, [saveAfterUpdate]);
+
   // ── Global keyboard shortcuts ──
   const modalOpenRef = useRef(false);
   modalOpenRef.current = isWarRoomModalGuardActive({
@@ -1203,6 +1343,7 @@ export default function App() {
     pasteConfirmOpen: pasteConfirmState !== null,
     sidebarModalOpen,
     snapshotExportOpen,
+    layoutPackageOpen,
   });
   const shortcutsOpenRef = useRef(false);
   shortcutsOpenRef.current = shortcutsOpen;
@@ -1416,6 +1557,7 @@ export default function App() {
             onFocusWindow={focusWindowFromSidebar}
             onAddWindowToWorkspace={(type, workspaceId) => addWindow(type, workspaceId)}
             onOpenSnapshotExport={() => setSnapshotExportOpen(true)}
+            onOpenLayoutPackage={openLayoutPackageDialog}
             onSelectWorkspace={switchWorkspace}
             onUpdateWorkspace={updateWorkspace}
             onDeleteWorkspace={deleteWorkspace}
@@ -1431,6 +1573,7 @@ export default function App() {
         <EmptyCanvasState
           onCreateWorkspace={() => setCreateDialogOpen(true)}
           onCreateDemoWorkspace={createDemoWorkspace}
+          onImportLayout={openLayoutPackageDialog}
         />
       )}
 
@@ -1452,6 +1595,20 @@ export default function App() {
         onOpenChange={setSnapshotExportOpen}
         workspaceName={activeWorkspaceName}
         getCaptureElement={getSnapshotCaptureElement}
+      />
+
+      <LayoutPackageDialog
+        open={layoutPackageOpen}
+        onOpenChange={handleLayoutPackageOpenChange}
+        initialScope={layoutPackageInitialScope}
+        workspaceName={layoutPackageWorkspace?.name ?? activeWorkspaceName}
+        workspaceCount={workspaces.length}
+        windowCount={windows.length}
+        workspaceWindowCount={layoutPackageWorkspaceWindowCount}
+        canExportKorum={workspaces.length > 0}
+        canExportWorkspace={Boolean(layoutPackageWorkspace)}
+        onBuildPackage={buildLayoutPackage}
+        onImportLayout={importLayoutPackage}
       />
 
       {commandCenterOpen ? (

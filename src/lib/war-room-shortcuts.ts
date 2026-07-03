@@ -8,6 +8,7 @@ export interface WarRoomModalGuardState {
   pasteConfirmOpen: boolean;
   sidebarModalOpen: boolean;
   snapshotExportOpen?: boolean;
+  layoutPackageOpen?: boolean;
 }
 
 export function isWarRoomModalGuardActive(state: WarRoomModalGuardState): boolean {
@@ -17,7 +18,8 @@ export function isWarRoomModalGuardActive(state: WarRoomModalGuardState): boolea
     state.createDialogOpen ||
     state.pasteConfirmOpen ||
     state.sidebarModalOpen ||
-    state.snapshotExportOpen === true;
+    state.snapshotExportOpen === true ||
+    state.layoutPackageOpen === true;
 }
 
 export function shouldToggleWarRoomShortcut(event: ShortcutEvent, modalOpen: boolean): boolean {

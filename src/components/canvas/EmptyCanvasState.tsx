@@ -1,14 +1,19 @@
 import BrandMark from "@/components/branding/BrandMark";
 import { Button } from "@/components/ui/button";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Rocket01Icon } from "@hugeicons/core-free-icons";
+import { FileImportIcon, Rocket01Icon } from "@hugeicons/core-free-icons";
 
 interface EmptyCanvasStateProps {
   onCreateWorkspace: () => void;
   onCreateDemoWorkspace: () => void;
+  onImportLayout: () => void;
 }
 
-export default function EmptyCanvasState({ onCreateWorkspace, onCreateDemoWorkspace }: EmptyCanvasStateProps) {
+export default function EmptyCanvasState({
+  onCreateWorkspace,
+  onCreateDemoWorkspace,
+  onImportLayout,
+}: EmptyCanvasStateProps) {
   return (
     <div className="absolute inset-0 flex items-center justify-center px-6">
       <div
@@ -81,8 +86,17 @@ export default function EmptyCanvasState({ onCreateWorkspace, onCreateDemoWorksp
             onClick={onCreateDemoWorkspace}
             className="gap-2 rounded-full px-3.5"
           >
-            <HugeiconsIcon icon={Rocket01Icon} size={13} aria-hidden="true" />
+            <HugeiconsIcon icon={Rocket01Icon} data-icon="inline-start" aria-hidden="true" />
             Try demo workspace
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onImportLayout}
+            className="gap-2 rounded-full px-3.5"
+          >
+            <HugeiconsIcon icon={FileImportIcon} data-icon="inline-start" aria-hidden="true" />
+            Import layout
           </Button>
         </div>
       </div>

@@ -517,6 +517,7 @@ interface SidebarProps {
   onFocusWindow: (id: string) => void;
   onAddWindowToWorkspace: (type: Extract<WindowKind, "terminal" | "note">, workspaceId: string) => void;
   onOpenSnapshotExport: () => void;
+  onOpenLayoutPackage: (workspaceId?: string) => void;
   onSelectWorkspace: (id: string) => void;
   onUpdateWorkspace: (id: string, updates: Partial<Omit<Workspace, "id">>) => void;
   onDeleteWorkspace: (id: string) => void;
@@ -531,6 +532,7 @@ export default function Sidebar({
   onCreateDialogChange,
   onModalOpenChange,
   onFocusWindow, onAddWindowToWorkspace, onOpenSnapshotExport, onSelectWorkspace,
+  onOpenLayoutPackage,
   onUpdateWorkspace, onDeleteWorkspace,
   onArrangeWindows, onRenameWindow, onRemoveWindow,
   onOpenFile,
@@ -670,6 +672,11 @@ export default function Sidebar({
     activateWorkspace(wsId);
     onOpenSnapshotExport();
   }, [activateWorkspace, onOpenSnapshotExport]);
+
+  const openLayoutPackageForWorkspace = useCallback((wsId: string) => {
+    activateWorkspace(wsId);
+    onOpenLayoutPackage(wsId);
+  }, [activateWorkspace, onOpenLayoutPackage]);
 
   const toggleFilePanel = useCallback(() => {
     if (!activeWs?.rootPath) return;
@@ -935,6 +942,10 @@ export default function Sidebar({
                           <HugeiconsIcon icon={CameraIcon} data-icon="inline-start" />
                           Snapshot
                         </ContextMenuItem>
+                        <ContextMenuItem onSelect={() => openLayoutPackageForWorkspace(ws.id)}>
+                          <HugeiconsIcon icon={PackageIcon} data-icon="inline-start" />
+                          Import / Export Layout
+                        </ContextMenuItem>
                       </ContextMenuGroup>
                       <ContextMenuSeparator />
                       <ContextMenuGroup>
@@ -987,23 +998,28 @@ export default function Sidebar({
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
-                className="px-2"
+                size="icon-sm"
                 onClick={onOpenSnapshotExport}
                 aria-label="Open War Room Snapshot export"
               >
-                <HugeiconsIcon icon={CameraIcon} />
+                <HugeiconsIcon icon={CameraIcon} data-icon="inline-start" aria-hidden="true" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top"><p>Snapshot</p></TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button type="button" variant="ghost" size="sm" className="px-2" onClick={() => onArrangeWindows()} aria-label="Arrange windows in grid">
-                <HugeiconsIcon icon={GridViewIcon} />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => onOpenLayoutPackage()}
+                aria-label="Import / Export Layout"
+              >
+                <HugeiconsIcon icon={PackageIcon} data-icon="inline-start" aria-hidden="true" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top"><p>Arrange in grid</p></TooltipContent>
+            <TooltipContent side="top"><p>Import / Export Layout</p></TooltipContent>
           </Tooltip>
         </div>
       </aside>
@@ -1144,7 +1160,7 @@ export default function Sidebar({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={handleDeleteConfirm}>Delete</AlertDialogAction>
+            <AlertDialogAction variant="destructive" onClick={handleDeleteConfirm}>Delete Workspace</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
