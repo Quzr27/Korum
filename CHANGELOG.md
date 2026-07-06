@@ -4,6 +4,23 @@ All notable changes to Korum will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.3] - 2026-07-06
+
+### Added
+- **Guided demo workspace** — new users and empty workspaces can start from a prepared demo layout with helper content and activation behavior.
+- **Command Center** — keyboard-first search and actions for workspaces, windows, and common navigation commands.
+- **War Room Snapshot export** — export polished PNG snapshots of the current canvas with composition controls.
+- **Worktree-aware session grouping** — sidebar and Command Center grouping now follow git worktree and branch metadata for Claude, Codex, and Aider sessions.
+- **Layout package import/export** — save, validate, share, and re-import repeatable workspace layouts as `.korum-layout.json` packages.
+
+### Changed
+- **Workspace onboarding and empty states** — clearer entry points for demo layouts, layout import, and first-session setup.
+- **Sidebar organization** — session groups and window lists better reflect active worktrees and exported layout workflows.
+
+### Internal
+- Added focused frontend and Rust coverage for demo workspace activation, Command Center indexing, snapshot export, worktree grouping/refresh, layout package validation, and context-menu behavior.
+- Stopped tracking local research and planning documents while keeping those paths ignored for local development notes.
+
 ## [0.4.2] - 2026-06-13
 
 ### Changed
