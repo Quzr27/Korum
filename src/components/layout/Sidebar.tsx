@@ -83,7 +83,7 @@ import {
   matchesWorktreeWindowQuery,
   type WorktreeGroupWindow,
 } from "@/lib/worktree-groups";
-import type { AgentActivity, Workspace, WorkspaceColor, WorkspaceIconKey, WindowKind } from "@/types";
+import type { AgentActivity, CodeViewMode, Workspace, WorkspaceColor, WorkspaceIconKey, WindowKind } from "@/types";
 import { WORKSPACE_COLORS } from "@/types";
 import FileTree from "@/components/layout/FileTree";
 
@@ -524,7 +524,7 @@ interface SidebarProps {
   onArrangeWindows: (workspaceId?: string) => void;
   onRenameWindow: (id: string, title: string) => void;
   onRemoveWindow: (id: string) => void;
-  onOpenFile: (filePath: string, workspaceId: string) => void;
+  onOpenFile: (filePath: string, workspaceId: string, viewMode?: CodeViewMode) => void;
 }
 
 export default function Sidebar({
@@ -1129,7 +1129,7 @@ export default function Sidebar({
                   showIgnored={showIgnored}
                   activeFilePath={activeFilePath}
                   openFilePaths={openFilePaths}
-                  onOpenFile={(filePath) => onOpenFile(filePath, activeWs.id)}
+                  onOpenFile={(filePath, viewMode) => onOpenFile(filePath, activeWs.id, viewMode)}
                 />
               </div>
             </ScrollArea>

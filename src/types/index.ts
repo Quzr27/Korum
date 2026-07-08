@@ -106,6 +106,7 @@ export interface GitFileStatus {
 }
 
 export interface GitStatusResult {
+  repo_root: string | null;
   statuses: GitFileStatus[];
   changed_count: number;
   insertions: number;

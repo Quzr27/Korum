@@ -67,9 +67,10 @@ interface AppSnapshot {
 }
 
 interface CodeOpenTarget {
-  line: number;
+  line?: number;
   column?: number;
   originTerminalId?: string;
+  viewMode?: CodeViewMode;
 }
 
 const SIDEBAR_RIGHT_EDGE = 288 + 24; // w-72 (288px) docked at left-0 + gap (24px)
@@ -708,6 +709,7 @@ export default function App() {
       workspaceId,
       filePath,
       target?.originTerminalId ?? "",
+      target?.viewMode ?? "",
       target?.line ?? "",
       target?.column ?? "",
     ].join("\0");
@@ -717,8 +719,8 @@ export default function App() {
     void (async () => {
       try {
         const workspace = stateRef.current.workspaces.find((ws) => ws.id === workspaceId);
-        let viewMode: CodeViewMode = "file";
-        if (target?.originTerminalId && workspace?.rootPath) {
+        let viewMode: CodeViewMode = target?.viewMode ?? "file";
+        if (!target?.viewMode && target?.originTerminalId && workspace?.rootPath) {
           try {
             const status = await getGitFileStatus(filePath, workspace.rootPath);
             viewMode = selectSmartLinkCodeViewMode({
@@ -747,7 +749,9 @@ export default function App() {
           if (el) el.style.zIndex = String(z);
           pendingZIndexRef.current.set(existing.id, z);
           if (existing.type === "code" && target) {
-            const targetNonce = viewMode === "file" ? ++codeTargetNonceRef.current : undefined;
+            const targetNonce = viewMode === "file" && typeof target.line === "number"
+              ? ++codeTargetNonceRef.current
+              : undefined;
             setWindows((prev) => prev.map((w) => (
               w.id === existing.id && w.type === "code"
                 ? {
@@ -812,7 +816,9 @@ export default function App() {
           originTerminalId,
           targetLine: viewMode === "file" ? target?.line : undefined,
           targetColumn: viewMode === "file" ? target?.column : undefined,
-          targetNonce: viewMode === "file" && target ? ++codeTargetNonceRef.current : undefined,
+          targetNonce: viewMode === "file" && typeof target?.line === "number"
+            ? ++codeTargetNonceRef.current
+            : undefined,
           createdAt: now,
           updatedAt: now,
         };
@@ -833,6 +839,14 @@ export default function App() {
     column?: number,
   ) => {
     openFile(filePath, workspaceId, { line, column, originTerminalId });
+  }, [openFile]);
+
+  const openSidebarFile = useCallback((
+    filePath: string,
+    workspaceId: string,
+    viewMode?: CodeViewMode,
+  ) => {
+    openFile(filePath, workspaceId, viewMode ? { viewMode } : undefined);
   }, [openFile]);
 
   /** Called by TerminalWindow when PTY spawns — stores ptyId in-memory (not persisted). */
@@ -1564,7 +1578,7 @@ export default function App() {
             onArrangeWindows={arrangeWindows}
             onRenameWindow={renameWindow}
             onRemoveWindow={removeWindow}
-            onOpenFile={openFile}
+            onOpenFile={openSidebarFile}
           />
         </div>
       ) : null}

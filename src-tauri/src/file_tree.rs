@@ -37,6 +37,7 @@ pub struct GitFileStatus {
 
 #[derive(Serialize, Clone)]
 pub struct GitStatusResult {
+    pub repo_root: Option<String>,
     pub statuses: Vec<GitFileStatus>,
     pub changed_count: u32,
     pub insertions: u32,
@@ -399,6 +400,7 @@ pub fn get_git_status(root_path: &str) -> Result<GitStatusResult, String> {
         Ok(r) => r,
         Err(_) => {
             return Ok(GitStatusResult {
+                repo_root: None,
                 statuses: Vec::new(),
                 changed_count: 0,
                 insertions: 0,
@@ -406,6 +408,12 @@ pub fn get_git_status(root_path: &str) -> Result<GitStatusResult, String> {
             });
         }
     };
+    let repo_root = repo.workdir().map(|path| {
+        std::fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .into_owned()
+    });
 
     // Single diff walk: collect both status and per-file line stats
     let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
@@ -486,6 +494,7 @@ pub fn get_git_status(root_path: &str) -> Result<GitStatusResult, String> {
     let changed_count = result.len() as u32;
 
     Ok(GitStatusResult {
+        repo_root,
         statuses: result,
         changed_count,
         insertions: total_ins,
@@ -1338,6 +1347,47 @@ mod tests {
             .expect("status lookup");
 
         assert!(status.is_none());
+
+        drop(repo);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn get_git_status_includes_repo_root_for_subdirectory_root() {
+        let (root, repo) = init_git_repo_with_file("gs_repo_root", "src/app.rs", "fn main() {}\n");
+        let file_path = root.join("src/app.rs");
+        fs::write(&file_path, "fn main() {\n    println!(\"hi\");\n}\n").expect("modify file");
+
+        let status = get_git_status(&root.join("src").to_string_lossy()).expect("git status");
+
+        assert_eq!(
+            status.repo_root,
+            Some(
+                fs::canonicalize(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
+        assert_eq!(status.statuses.len(), 1);
+        assert_eq!(status.statuses[0].path, "src/app.rs");
+
+        drop(repo);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn get_file_diff_returns_deleted_rows_for_deleted_file() {
+        let (root, repo) = init_git_repo_with_file("gfd_deleted", "src/app.rs", "fn main() {}\n");
+        let file_path = root.join("src/app.rs");
+        fs::remove_file(&file_path).expect("delete file");
+
+        let diff = get_file_diff(&file_path.to_string_lossy(), &root.to_string_lossy())
+            .expect("deleted file diff");
+
+        assert!(diff
+            .iter()
+            .any(|line| line.origin == "delete" && line.content == "fn main() {}"));
 
         drop(repo);
         fs::remove_dir_all(&root).ok();

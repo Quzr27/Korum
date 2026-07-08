@@ -24,6 +24,7 @@ import { tokenizeCode, tokenizeCodeLines } from "@/lib/shiki";
 import { detectLanguage } from "@/lib/lang-detect";
 import { useDragResize, type WindowMotionRect } from "@/lib/use-drag-resize";
 import { shouldHandleCodeTarget } from "@/lib/code-window-target";
+import { buildDeletedOnlyDiffRows } from "@/lib/code-window-diff";
 import { getVirtualCodeRows } from "@/lib/code-window-virtualization";
 import { getCodeWindowPerformancePolicy } from "@/lib/code-window-performance";
 import { createCodeLineHtmlCache, type CodeLineHtmlCache } from "@/lib/code-window-rendering";
@@ -393,7 +394,18 @@ export default memo(function CodeWindow({
     return { addedLines, deletedBefore, trailingDeletes };
   }, [diffLines]);
 
+  const deletedOnlyRows = useMemo(() => {
+    if (sourceLines != null) return null;
+    return buildDeletedOnlyDiffRows(diffLines)?.map((row): CodeRenderRow => ({
+      kind: "diff-delete",
+      key: row.key,
+      oldLine: row.oldLine,
+      text: row.text,
+    })) ?? null;
+  }, [diffLines, sourceLines]);
+
   const changesRows = useMemo(() => {
+    if (sourceLines == null) return deletedOnlyRows;
     if (sourceLines == null || diffAnnotations == null) return null;
     const { addedLines, deletedBefore, trailingDeletes } = diffAnnotations;
 
@@ -441,7 +453,7 @@ export default memo(function CodeWindow({
     }
 
     return rows;
-  }, [lineTokens, sourceLines, diffAnnotations]);
+  }, [lineTokens, sourceLines, diffAnnotations, deletedOnlyRows]);
 
   const activeRows = win.viewMode === "file" ? fileRows : changesRows;
   const activeRowCount = activeRows?.length ?? 0;
@@ -876,6 +888,7 @@ export default memo(function CodeWindow({
       </div>
     ));
   }, [performancePolicy.previewMode, sourceLines]);
+  const readError = error && !(win.viewMode === "changes" && changesRows != null) ? error : null;
 
   return (
     <ContextMenu>
@@ -1019,9 +1032,9 @@ export default memo(function CodeWindow({
               <div className="flex h-full items-center justify-center text-muted-foreground/50 text-xs">
                 Loading{"\u2026"}
               </div>
-            ) : error ? (
+            ) : readError ? (
               <div className="flex h-full items-center justify-center text-destructive/60 text-xs px-4 text-center">
-                {error}
+                {readError}
               </div>
             ) : changesEmpty ? (
               <div className="flex h-full items-center justify-center text-muted-foreground/50 text-xs">
