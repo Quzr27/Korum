@@ -15,12 +15,20 @@ Requires: [Rust](https://rustup.rs/), [Bun](https://bun.sh/), Xcode Command Line
 
 ```bash
 bun run lint
-bun run tsc --noEmit
-bun run vitest run
-cd src-tauri && cargo check
+bun run typecheck
+bun run test
+(cd src-tauri && cargo check)
+(cd src-tauri && cargo test)
 ```
 
-All four must pass.
+All checks must pass.
+
+## Release branches
+
+- Cut release prep from `main` after all intended feature/fix PRs have merged.
+- Use `release/vX.Y.Z` branch names.
+- Bump the version in `package.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` (the `korum` package entry), and `src-tauri/tauri.conf.json` together.
+- Update `CHANGELOG.md` and the README release badge before opening the release PR.
 
 ## Guidelines
 
