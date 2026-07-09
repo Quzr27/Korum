@@ -29,7 +29,9 @@ import {
 import { cn } from "@/lib/utils";
 import { getFileIconName, GIT_STATUS_COLORS } from "@/lib/file-icons";
 import { getFileTreeRevealDirectories } from "@/lib/file-tree-reveal";
-import type { FileEntry, GitStatusResult } from "@/types";
+import { buildGitStatusByAbsolutePath, normalizeChangedFiles } from "@/lib/changed-files";
+import ChangedFilesStrip from "@/components/layout/ChangedFilesStrip";
+import type { CodeViewMode, FileEntry, GitStatusResult } from "@/types";
 
 // ── Helpers ──
 
@@ -54,7 +56,7 @@ interface FileTreeProps {
   showIgnored: boolean;
   activeFilePath?: string;
   openFilePaths?: ReadonlySet<string>;
-  onOpenFile: (filePath: string) => void;
+  onOpenFile: (filePath: string, viewMode?: CodeViewMode) => void;
 }
 
 /** Reject names with path separators or traversal components. */
@@ -74,7 +76,7 @@ export default function FileTree({
 }: FileTreeProps) {
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set([rootPath]));
   const [entries, setEntries] = useState<Map<string, FileEntry[]>>(new Map());
-  const [gitStatus, setGitStatus] = useState<Map<string, { status: string; insertions: number; deletions: number }>>(new Map());
+  const [gitStatusResult, setGitStatusResult] = useState<GitStatusResult | null>(null);
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -121,14 +123,9 @@ export default function FileTree({
     try {
       const result = await invoke<GitStatusResult>("get_git_status", { rootPath });
       if (!mountedRef.current) return;
-      const map = new Map<string, { status: string; insertions: number; deletions: number }>();
-      for (const s of result.statuses) {
-        map.set(s.path, { status: s.status, insertions: s.insertions, deletions: s.deletions });
-      }
-      setGitStatus(map);
-      setDiffStats({ insertions: result.insertions, deletions: result.deletions });
+      setGitStatusResult(result);
     } catch {
-      // Not a git repo or error
+      if (mountedRef.current) setGitStatusResult(null);
     }
   }, [rootPath]);
 
@@ -284,32 +281,41 @@ export default function FileTree({
 
   // ── Git status for a path ──
 
-  const rootPrefix = useMemo(
-    () => (rootPath.endsWith("/") ? rootPath : `${rootPath}/`),
-    [rootPath],
+  const changedFileRows = useMemo(
+    () => normalizeChangedFiles({ workspaceRoot: rootPath, status: gitStatusResult }),
+    [gitStatusResult, rootPath],
+  );
+  const changedFileStats = useMemo(() => (
+    changedFileRows.reduce(
+      (total, row) => ({
+        insertions: total.insertions + row.insertions,
+        deletions: total.deletions + row.deletions,
+      }),
+      { insertions: 0, deletions: 0 },
+    )
+  ), [changedFileRows]);
+
+  const gitStatus = useMemo(
+    () => buildGitStatusByAbsolutePath({ workspaceRoot: rootPath, status: gitStatusResult }),
+    [gitStatusResult, rootPath],
   );
 
   const getFileGitInfo = useCallback(
     (entryPath: string): { status: string; insertions: number; deletions: number } | undefined => {
-      const relative = entryPath.startsWith(rootPrefix)
-        ? entryPath.slice(rootPrefix.length)
-        : entryPath;
-      return gitStatus.get(relative);
+      return gitStatus.get(entryPath.replace(/\\/g, "/").replace(/\/$/, ""));
     },
-    [rootPrefix, gitStatus],
+    [gitStatus],
   );
 
   const dirHasChanges = useCallback(
     (dirPath: string): boolean => {
-      const relative = dirPath.startsWith(rootPrefix)
-        ? dirPath.slice(rootPrefix.length) + "/"
-        : dirPath + "/";
+      const normalizedDirPath = dirPath.replace(/\\/g, "/").replace(/\/$/, "");
       for (const [path] of gitStatus) {
-        if (path.startsWith(relative)) return true;
+        if (path.startsWith(`${normalizedDirPath}/`)) return true;
       }
       return false;
     },
-    [rootPrefix, gitStatus],
+    [gitStatus],
   );
 
   // ── File operations (pass rootPath for confinement) ──
@@ -406,14 +412,12 @@ export default function FileTree({
     }
   }, [entries, fetchDirectory]);
 
-  // ── Git diff line stats (from backend) ──
-
-  const [diffStats, setDiffStats] = useState<{ insertions: number; deletions: number }>({ insertions: 0, deletions: 0 });
-
   // ── Render ──
 
   return (
     <>
+      <ChangedFilesStrip rows={changedFileRows} onOpenFile={onOpenFile} />
+
       {/* Watcher error indicator */}
       {watcherError && (
         <div className="flex items-center gap-1.5 px-3 py-1 text-[10px] text-muted-foreground/50 italic">
@@ -423,16 +427,16 @@ export default function FileTree({
       )}
 
       {/* Git diff stats summary */}
-      {(diffStats.insertions > 0 || diffStats.deletions > 0) && (
+      {(changedFileStats.insertions > 0 || changedFileStats.deletions > 0) && (
         <div className="flex items-center gap-2.5 px-3 py-1.5 text-[10px] tabular-nums">
-          {diffStats.insertions > 0 && (
-            <span style={{ color: GIT_STATUS_COLORS.A }}>+{diffStats.insertions}</span>
+          {changedFileStats.insertions > 0 && (
+            <span style={{ color: GIT_STATUS_COLORS.A }}>+{changedFileStats.insertions}</span>
           )}
-          {diffStats.deletions > 0 && (
-            <span style={{ color: GIT_STATUS_COLORS.D }}>&minus;{diffStats.deletions}</span>
+          {changedFileStats.deletions > 0 && (
+            <span style={{ color: GIT_STATUS_COLORS.D }}>&minus;{changedFileStats.deletions}</span>
           )}
           <span className="text-muted-foreground/30">
-            {gitStatus.size} file{gitStatus.size !== 1 ? "s" : ""}
+            {changedFileRows.length} file{changedFileRows.length !== 1 ? "s" : ""}
           </span>
         </div>
       )}
