@@ -4,6 +4,18 @@ All notable changes to Korum will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.4] - 2026-07-09
+
+### Added
+- **Changed files strip** — workspace drawers now surface changed files in a compact strip so modified, added, deleted, and untracked files can be opened quickly in the right CodeWindow mode.
+
+### Fixed
+- **Terminal repaint repair** — live terminal output now performs a harder xterm renderer refresh so stale WKWebView DOM rows do not linger over the prompt/status area until a manual resize.
+- **Deleted-file diffs** — CodeWindow diff rendering handles deleted-only files more reliably when opened from workspace git changes.
+
+### Internal
+- Added focused coverage for changed-file normalization, changed-file strip rendering, deleted-file diff rows, and xterm repaint repair.
+
 ## [0.4.3] - 2026-07-06
 
 ### Added

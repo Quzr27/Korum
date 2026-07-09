@@ -7,7 +7,7 @@ Drag, resize, zoom — organize your workflow spatially instead of switching bet
 
 ![Korum spatial terminal workspace](korum-v0.4.1-screenshot.png)
 
-> **v0.4.3** — early release. macOS only for now.
+> **v0.4.4** — early release. macOS only for now.
 
 ## Status
 
@@ -20,6 +20,7 @@ Korum is currently in early release. Right now, the focus is stability, persiste
 - **Command Center** — search workspaces, windows, and common actions without leaving the keyboard.
 - **War-room mode** — focus the workspace around active agent sessions when you need a calmer view.
 - **Workspace portability** — export War Room snapshots and share/import layout packages for repeatable setups.
+- **Changed files strip** — jump from workspace git changes into focused CodeWindows without hunting through the tree.
 - **Terminal Smart Links** — open URLs and local file paths from terminal output directly into browser or CodeWindows.
 - **Code viewer with diffs** — inspect files with Shiki highlighting, inline changes, minimap, and line targeting.
 - **Project file tree** — browse workspaces with git status, search, file actions, active file reveal, and worktree-aware session grouping.
