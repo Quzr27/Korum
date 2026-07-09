@@ -41,6 +41,7 @@ import {
   normalizeTerminalStatusGlyphs,
 } from "@/lib/terminal-glyph-normalizer";
 import { handleTerminalShortcut } from "@/lib/terminal-shortcuts";
+import { refreshTerminalDisplay } from "@/lib/xterm-render-repair";
 import { adjustMouseForZoom, invalidateContainerRect } from "@/lib/xterm-mouse-compat";
 import { useVisibility } from "@/lib/visibility-context";
 import type { PasteRequest } from "@/types";
@@ -136,39 +137,6 @@ function forceTerminalFontRemeasure(term: Terminal, fontFamily: string) {
   term.options.fontFamily = `${fontFamily}, monospace`;
   term.options.fontFamily = fontFamily;
   term.clearTextureAtlas();
-}
-
-function refreshTerminalDisplay(
-  term: Terminal,
-  options: {
-    isCurrent: () => boolean;
-    clearSelection?: boolean;
-    onComplete?: () => void;
-  },
-): number {
-  if (options.clearSelection) term.clearSelection();
-
-  const buf = term.buffer.active;
-  const wasAtBottom = buf.viewportY >= buf.baseY;
-  const savedViewportY = buf.viewportY;
-  term.clearTextureAtlas();
-
-  return requestAnimationFrame(() => {
-    try {
-      if (!options.isCurrent()) return;
-
-      term.refresh(0, term.rows - 1);
-      // Restore: if user was scrolled to bottom, stay there (baseY may have
-      // changed from new data); otherwise restore exact viewport position.
-      if (wasAtBottom) {
-        term.scrollToBottom();
-      } else if (buf.viewportY !== savedViewportY) {
-        term.scrollLines(savedViewportY - buf.viewportY);
-      }
-    } finally {
-      options.onComplete?.();
-    }
-  });
 }
 
 function buildCellBoundaryMaps(line: IBufferLine, text: string, maxCols: number) {
