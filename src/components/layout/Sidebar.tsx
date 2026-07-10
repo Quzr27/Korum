@@ -38,6 +38,8 @@ import {
   EyeIcon,
   ViewOffSlashIcon,
   PanelLeftIcon,
+  PlayIcon,
+  StopIcon,
 } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -512,6 +514,8 @@ interface SidebarProps {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
   activeWindowId: string | null;
+  runningTerminalIds: ReadonlySet<string>;
+  stoppedTerminalIds: ReadonlySet<string>;
   onCreateDialogChange: (open: boolean) => void;
   onModalOpenChange?: (open: boolean) => void;
   onFocusWindow: (id: string) => void;
@@ -525,10 +529,12 @@ interface SidebarProps {
   onRenameWindow: (id: string, title: string) => void;
   onRemoveWindow: (id: string) => void;
   onOpenFile: (filePath: string, workspaceId: string, viewMode?: CodeViewMode) => void;
+  onStopWorkspaceTerminals: (workspaceId: string) => void;
+  onRestartWorkspaceTerminals: (workspaceId: string) => void;
 }
 
 export default function Sidebar({
-  windows, workspaces, activeWorkspaceId, activeWindowId,
+  windows, workspaces, activeWorkspaceId, activeWindowId, runningTerminalIds, stoppedTerminalIds,
   onCreateDialogChange,
   onModalOpenChange,
   onFocusWindow, onAddWindowToWorkspace, onOpenSnapshotExport, onSelectWorkspace,
@@ -536,6 +542,7 @@ export default function Sidebar({
   onUpdateWorkspace, onDeleteWorkspace,
   onArrangeWindows, onRenameWindow, onRemoveWindow,
   onOpenFile,
+  onStopWorkspaceTerminals, onRestartWorkspaceTerminals,
 }: SidebarProps) {
   const [query, setQuery] = useState("");
   const [fileDrawerOpenByWorkspaceId, setFileDrawerOpenByWorkspaceId] = useState<Record<string, boolean>>(
@@ -550,6 +557,7 @@ export default function Sidebar({
   const [collapsed, setCollapsed] = useState(false);
   const [editWorkspace, setEditWorkspace] = useState<Workspace | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
+  const [stopTarget, setStopTarget] = useState<Workspace | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   // Track which workspaces are collapsed — expanded by default
@@ -588,7 +596,7 @@ export default function Sidebar({
     writeSidebarUiState({ fileDrawerOpenByWorkspaceId, fileQueryByWorkspaceId, showIgnoredByWorkspaceId });
   }, [fileDrawerOpenByWorkspaceId, fileQueryByWorkspaceId, showIgnoredByWorkspaceId]);
 
-  const localModalOpen = editWorkspace !== null || deleteTarget !== null;
+  const localModalOpen = editWorkspace !== null || deleteTarget !== null || stopTarget !== null;
   useEffect(() => {
     onModalOpenChange?.(localModalOpen);
     return () => {
@@ -614,6 +622,12 @@ export default function Sidebar({
     onDeleteWorkspace(deleteTarget.id);
     setDeleteTarget(null);
   }, [deleteTarget, onDeleteWorkspace]);
+
+  const handleStopConfirm = useCallback(() => {
+    if (!stopTarget) return;
+    onStopWorkspaceTerminals(stopTarget.id);
+    setStopTarget(null);
+  }, [onStopWorkspaceTerminals, stopTarget]);
 
   const startRename = useCallback((w: SidebarWindow) => {
     setRenamingId(w.id);
@@ -775,6 +789,12 @@ export default function Sidebar({
               const isActive = ws.id === activeWorkspaceId;
               const isExpanded = !collapsedIds.has(ws.id);
               const wsWindows = windows.filter((w) => w.workspaceId === ws.id);
+              const runningTerminalCount = wsWindows.filter((w) => (
+                w.type === "terminal" && runningTerminalIds.has(w.id)
+              )).length;
+              const stoppedTerminalCount = wsWindows.filter((w) => (
+                w.type === "terminal" && stoppedTerminalIds.has(w.id)
+              )).length;
               const matchesQuery = (w: SidebarWindow) => matchesWorktreeWindowQuery(w, normalizedQuery);
               const filteredChildren = [
                 ...wsWindows.filter((w) => w.type === "terminal" && matchesQuery(w)),
@@ -926,6 +946,25 @@ export default function Sidebar({
                           New Note
                         </ContextMenuItem>
                       </ContextMenuGroup>
+                      {(runningTerminalCount > 0 || stoppedTerminalCount > 0) ? (
+                        <>
+                          <ContextMenuSeparator />
+                          <ContextMenuGroup>
+                            {runningTerminalCount > 0 ? (
+                              <ContextMenuItem variant="destructive" onSelect={() => setStopTarget(ws)}>
+                                <HugeiconsIcon icon={StopIcon} data-icon="inline-start" />
+                                Stop Terminal Sessions
+                              </ContextMenuItem>
+                            ) : null}
+                            {stoppedTerminalCount > 0 ? (
+                              <ContextMenuItem onSelect={() => onRestartWorkspaceTerminals(ws.id)}>
+                                <HugeiconsIcon icon={PlayIcon} data-icon="inline-start" />
+                                Restart Stopped Sessions
+                              </ContextMenuItem>
+                            ) : null}
+                          </ContextMenuGroup>
+                        </>
+                      ) : null}
                       <ContextMenuSeparator />
                       <ContextMenuGroup>
                         {ws.rootPath ? (
@@ -1025,7 +1064,7 @@ export default function Sidebar({
       </aside>
 
       {/* File tree drawer — docked to sidebar right edge */}
-      {activeWs && activeRootPath && (
+      {activeWs && activeRootPath && sidebarDrawerOpen && (
         <aside
           data-state={sidebarDrawerOpen ? "open" : "closed"}
           aria-hidden={!sidebarDrawerOpen}
@@ -1123,6 +1162,7 @@ export default function Sidebar({
             <ScrollArea className="flex-1 min-h-0">
               <div className="px-0.5 py-1">
                 <FileTree
+                  key={activeRootPath}
                   rootPath={activeRootPath}
                   query={activeWorkspaceFileQuery}
                   wsColor={WORKSPACE_COLORS[activeWs.color]}
@@ -1161,6 +1201,21 @@ export default function Sidebar({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction variant="destructive" onClick={handleDeleteConfirm}>Delete Workspace</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!stopTarget} onOpenChange={(open) => { if (!open) setStopTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Stop terminal sessions in &ldquo;{stopTarget?.name}&rdquo;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Running commands and agents will be terminated. Terminal windows and their layout stay available and can be restarted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={handleStopConfirm}>Stop Sessions</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

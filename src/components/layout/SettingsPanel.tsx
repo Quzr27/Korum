@@ -241,6 +241,28 @@ export default function SettingsPanel({ dismissVersion = 0 }: SettingsPanelProps
             </SettingsSection>
 
             <SettingsSection title="Terminal">
+              <SettingRow label="Renderer">
+                <ToggleGroup
+                  type="single"
+                  value={settings.terminalRenderer}
+                  onValueChange={(value) => {
+                    if (value === "auto" || value === "dom") {
+                      update({ terminalRenderer: value });
+                    }
+                  }}
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                >
+                  <ToggleGroupItem value="auto" aria-label="Automatic terminal renderer" className="flex-1">
+                    Auto
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="dom" aria-label="DOM terminal renderer" className="flex-1">
+                    DOM
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </SettingRow>
+
               <SettingRow label="Theme">
                 <div className="rounded-md border border-border/80 bg-background/15">
                   <ScrollArea className="h-44">

@@ -13,7 +13,7 @@
  * - Resize (win.width/height)
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Terminal, type IBufferLine, type ILink } from "@xterm/xterm";
@@ -26,7 +26,7 @@ import {
   TERMINAL_NERD_FONT_SAMPLE,
   getXtermTheme,
 } from "@/lib/settings";
-import type { TerminalFont, TerminalTheme } from "@/lib/settings/types";
+import type { TerminalFont, TerminalRenderer, TerminalTheme } from "@/lib/settings/types";
 import {
   findTerminalDiagnosticLink,
   findTerminalFileContext,
@@ -41,20 +41,19 @@ import {
   normalizeTerminalStatusGlyphs,
 } from "@/lib/terminal-glyph-normalizer";
 import { handleTerminalShortcut } from "@/lib/terminal-shortcuts";
-import { refreshTerminalDisplay } from "@/lib/xterm-render-repair";
+import {
+  activateTerminalRenderer,
+  createTerminalDisplayRepairScheduler,
+  refreshTerminalDisplay,
+} from "@/lib/xterm-render-repair";
 import { adjustMouseForZoom, invalidateContainerRect } from "@/lib/xterm-mouse-compat";
 import { useVisibility } from "@/lib/visibility-context";
 import type { PasteRequest } from "@/types";
 
 const SNAPSHOT_SCROLLBACK_ROWS = 120;
 const LIVE_WRITE_REPAIR_IDLE_DELAY_MS = 180;
-const LIVE_WRITE_REPAIR_MAX_DELAY_MS = 1000;
-// Flow control: when xterm's un-parsed write backlog exceeds the high-water
-// mark we pause the Rust PTY read thread; we resume once it drains below the
-// low-water mark. Sized so ordinary output never trips them — only sustained
-// floods (`yes`, huge `cat`, many busy agents) do — bounding IPC/memory growth.
-const LIVE_WRITE_PAUSE_HIGH_WATER = 2_000_000;
-const LIVE_WRITE_PAUSE_LOW_WATER = 400_000;
+const TERMINAL_OUTPUT_ACK_BATCH_BYTES = 128 * 1024;
+const TERMINAL_OUTPUT_ACK_DELAY_MS = 50;
 const ESLINT_CONTEXT_SCAN_LINES = 24;
 const TERMINAL_FONT_LOAD_TIMEOUT_MS = 1500;
 
@@ -67,33 +66,109 @@ const DISPOSE_BURST_RESET_MS = 250;
 let disposeBurstSlot = 0;
 let lastDisposeScheduledAt = 0;
 
+export interface TerminalOutputAcker {
+  acknowledgeParsed(bytes: number): void;
+  acknowledgeImmediately(bytes: number): void;
+  dispose(): void;
+}
+
+interface TerminalAttachGenerationOptions {
+  attach: () => Promise<unknown>;
+  detach: () => Promise<unknown>;
+  isAlive: () => boolean;
+  markAttached: () => void;
+}
+
+/** Complete one async attach without letting a React cleanup race leak the
+ * newly-created channel. The alive check and mark happen in the same microtask;
+ * a dead generation is detached before this promise resolves. */
+export async function attachTerminalGeneration({
+  attach,
+  detach,
+  isAlive,
+  markAttached,
+}: TerminalAttachGenerationOptions): Promise<void> {
+  await attach();
+  if (!isAlive()) {
+    await detach().catch(() => {});
+    return;
+  }
+  markAttached();
+}
+
+/** Batch credits returned after xterm has parsed raw PTY bytes. The backend
+ * caps each attachment at 512 KiB outstanding, so the 128 KiB/50 ms ACK policy
+ * preserves throughput without one IPC invoke per channel chunk. */
+export function createTerminalOutputAcker(
+  sendAck: (bytes: number) => void | Promise<void>,
+): TerminalOutputAcker {
+  let pendingBytes = 0;
+  let timer: number | null = null;
+  let disposed = false;
+  let sendInFlight = false;
+
+  const schedule = () => {
+    if (disposed || timer !== null || pendingBytes <= 0) return;
+    timer = window.setTimeout(flush, TERMINAL_OUTPUT_ACK_DELAY_MS);
+  };
+
+  function flush() {
+    if (timer !== null) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+    if (disposed || sendInFlight || pendingBytes <= 0) return;
+    const bytes = pendingBytes;
+    pendingBytes = 0;
+    sendInFlight = true;
+
+    const settle = (succeeded: boolean) => {
+      sendInFlight = false;
+      if (disposed) return;
+      if (!succeeded) pendingBytes += bytes;
+      if (succeeded && pendingBytes >= TERMINAL_OUTPUT_ACK_BATCH_BYTES) flush();
+      else schedule();
+    };
+
+    try {
+      void Promise.resolve(sendAck(bytes)).then(
+        () => settle(true),
+        () => settle(false),
+      );
+    } catch {
+      settle(false);
+    }
+  }
+
+  return {
+    acknowledgeParsed(bytes) {
+      if (disposed || bytes <= 0) return;
+      pendingBytes += bytes;
+      if (pendingBytes >= TERMINAL_OUTPUT_ACK_BATCH_BYTES) {
+        flush();
+      } else schedule();
+    },
+    acknowledgeImmediately(bytes) {
+      if (disposed || bytes <= 0) return;
+      pendingBytes += bytes;
+      flush();
+    },
+    dispose() {
+      disposed = true;
+      pendingBytes = 0;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    },
+  };
+}
+
 function nextDisposeDelay(): number {
   const now = performance.now();
   if (now - lastDisposeScheduledAt > DISPOSE_BURST_RESET_MS) disposeBurstSlot = 0;
   lastDisposeScheduledAt = now;
   return disposeBurstSlot++ * DISPOSE_SLOT_MS;
-}
-
-/**
- * Leave a static clone of the terminal's rendered rows in the container when
- * a still-mounted terminal is detached (live-budget eviction, attach
- * staggering). The window keeps showing its last frame instead of going
- * blank; the next attach clears it via `replaceChildren()`.
- */
-function appendTerminalGhost(container: HTMLElement, term: Terminal): void {
-  const rows = term.element?.querySelector(".xterm-rows");
-  if (!rows) return;
-  container.querySelector(".terminal-ghost")?.remove();
-  const ghost = document.createElement("div");
-  // The `xterm` class keeps xterm.css row styling and the container's gutter
-  // padding applying to the clone, so the ghost aligns with the live layout.
-  ghost.className = "terminal-ghost xterm";
-  ghost.setAttribute("aria-hidden", "true");
-  ghost.style.fontFamily = String(term.options.fontFamily ?? "");
-  ghost.style.fontSize = `${term.options.fontSize ?? 13}px`;
-  ghost.style.lineHeight = String(term.options.lineHeight ?? 1.22);
-  ghost.appendChild(rows.cloneNode(true));
-  container.appendChild(ghost);
 }
 
 interface LogicalTerminalLine {
@@ -236,6 +311,19 @@ export interface PendingDispose {
   capture?: () => string | null;
 }
 
+export function shouldCaptureTerminalSnapshot(
+  attached: boolean,
+  hasLiveData: boolean,
+  snapshotEpoch: number,
+  currentSnapshotEpoch: number,
+): boolean {
+  return attached && hasLiveData && snapshotEpoch === currentSnapshotEpoch;
+}
+
+function readSnapshotEpoch(ref: React.RefObject<number>): number {
+  return ref.current;
+}
+
 export interface UseXtermSessionOptions {
   id: string;
   isPtyReady: boolean;
@@ -244,11 +332,13 @@ export interface UseXtermSessionOptions {
   terminalFont: TerminalFont;
   terminalFontSize: number;
   terminalTheme: TerminalTheme;
+  terminalRenderer: TerminalRenderer;
   zoomRef: React.RefObject<number>;
   ptyIdRef: React.MutableRefObject<string | null>;
   mountedRef: React.MutableRefObject<boolean>;
   termRef: React.RefObject<HTMLDivElement | null>;
   pendingDisposeRef: React.MutableRefObject<PendingDispose | null>;
+  snapshotEpochRef: React.RefObject<number>;
   windowWidth: number;
   windowHeight: number;
   isActive: boolean;
@@ -259,8 +349,6 @@ export interface UseXtermSessionOptions {
   workspaceRoot?: string;
   onOpenFileLink: (filePath: string, line: number, column?: number) => void;
   onSpawnError: (error: string) => void;
-  /** Notifies the owner whether a static detach ghost occupies the container. */
-  onGhosted: (hasGhost: boolean) => void;
 }
 
 export interface UseXtermSessionResult {
@@ -278,11 +366,13 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     terminalFont,
     terminalFontSize,
     terminalTheme,
+    terminalRenderer,
     zoomRef,
     ptyIdRef,
     mountedRef,
     termRef,
     pendingDisposeRef,
+    snapshotEpochRef,
     windowWidth,
     windowHeight,
     isActive,
@@ -292,7 +382,6 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     workspaceRoot,
     onOpenFileLink,
     onSpawnError,
-    onGhosted,
   } = opts;
 
   const termInstanceRef = useRef<Terminal | null>(null);
@@ -309,11 +398,6 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
   const lastFitSizeRef = useRef({ windowWidth, windowHeight });
 
   const { register: registerVisibility, unregister: unregisterVisibility } = useVisibility();
-
-  // Read at cleanup time on purpose: distinguishes a detach-while-mounted
-  // (live-budget eviction → leave a ghost) from a component unmount, where
-  // Effect A's cleanup has already flipped mountedRef to false.
-  const isStillMounted = useCallback(() => mountedRef.current, [mountedRef]);
 
   useEffect(() => {
     workspaceRootRef.current = workspaceRoot;
@@ -333,7 +417,6 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     // state yet, so prefer the just-flushed value to avoid losing scrollback.
     const flushedSnapshot = flushPendingDispose();
     termRef.current.replaceChildren();
-    onGhosted(false);
 
     const xtermTheme = getXtermTheme(terminalTheme);
     const fontFamily = TERMINAL_FONT_FAMILIES[terminalFont];
@@ -369,6 +452,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
 
     // Open terminal synchronously (container is in DOM from React commit)
     term.open(termRef.current!);
+    activateTerminalRenderer(term, terminalRenderer);
 
     const linkProviderDisposable = term.registerLinkProvider({
       provideLinks: (bufferLineNumber, callback) => {
@@ -431,24 +515,13 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     let alive = true;
     let attached = false;
     let hasLiveData = false;
-    // Flow control: bytes written to xterm but not yet parsed (callback pending).
-    let pendingParseBytes = 0;
-    let readPaused = false;
-    let liveWriteRepairTimer: number | null = null;
-    let liveWriteRepairMaxTimer: number | null = null;
+    const snapshotEpoch = readSnapshotEpoch(snapshotEpochRef);
+    const attachmentId = crypto.randomUUID();
+    const outputAcker = createTerminalOutputAcker((bytes) =>
+      invoke("ack_terminal_output", { id: ptyId, attachmentId, bytes }),
+    );
     let liveWriteRepairRaf: number | null = null;
-    const clearLiveWriteRepairTimers = () => {
-      if (liveWriteRepairTimer !== null) {
-        window.clearTimeout(liveWriteRepairTimer);
-        liveWriteRepairTimer = null;
-      }
-      if (liveWriteRepairMaxTimer !== null) {
-        window.clearTimeout(liveWriteRepairMaxTimer);
-        liveWriteRepairMaxTimer = null;
-      }
-    };
     const runLiveWriteRepair = () => {
-      clearLiveWriteRepairTimers();
       if (!alive || liveWriteRepairRaf !== null) return;
 
       liveWriteRepairRaf = refreshTerminalDisplay(term, {
@@ -458,21 +531,10 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
         },
       });
     };
-    const scheduleLiveWriteRepair = () => {
-      if (!alive) return;
-
-      if (liveWriteRepairTimer !== null) {
-        window.clearTimeout(liveWriteRepairTimer);
-      }
-      liveWriteRepairTimer = window.setTimeout(runLiveWriteRepair, LIVE_WRITE_REPAIR_IDLE_DELAY_MS);
-
-      if (liveWriteRepairMaxTimer === null) {
-        liveWriteRepairMaxTimer = window.setTimeout(
-          runLiveWriteRepair,
-          LIVE_WRITE_REPAIR_MAX_DELAY_MS,
-        );
-      }
-    };
+    const liveWriteRepairScheduler = createTerminalDisplayRepairScheduler(
+      runLiveWriteRepair,
+      LIVE_WRITE_REPAIR_IDLE_DELAY_MS,
+    );
     // Capture snapshot at mount time — never read reactively. Prefer a snapshot
     // just flushed from a fast reattach over the (possibly stale) prop.
     const snapshotAtMount = flushedSnapshot ?? terminalSnapshot;
@@ -488,24 +550,15 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
       hasLiveData = true;
       const chunkBytes = data.byteLength;
       const text = outputNormalizer.normalize(new Uint8Array(data));
-      if (!text) return;
-
-      // Backpressure: track xterm's un-parsed backlog and pause the PTY read
-      // thread when it gets too far ahead, resuming in the write callback once
-      // xterm catches up. Without this a flood queues unbounded IPC + grows
-      // xterm's internal buffer, janking the whole canvas.
-      pendingParseBytes += chunkBytes;
-      if (!readPaused && pendingParseBytes >= LIVE_WRITE_PAUSE_HIGH_WATER && ptyIdRef.current) {
-        readPaused = true;
-        invoke("pause_terminal_read", { id: ptyIdRef.current }).catch(() => {});
+      if (!text) {
+        // The streaming decoder can retain an incomplete UTF-8 sequence. No
+        // xterm write callback will fire, so return those raw-byte credits now.
+        outputAcker.acknowledgeImmediately(chunkBytes);
+        return;
       }
       term.write(text, () => {
-        pendingParseBytes -= chunkBytes;
-        if (readPaused && pendingParseBytes <= LIVE_WRITE_PAUSE_LOW_WATER && ptyIdRef.current) {
-          readPaused = false;
-          invoke("resume_terminal_read", { id: ptyIdRef.current }).catch(() => {});
-        }
-        scheduleLiveWriteRepair();
+        outputAcker.acknowledgeParsed(chunkBytes);
+        liveWriteRepairScheduler.schedule();
       });
     };
     const onDataDisposable = term.onData((data: string) => {
@@ -532,10 +585,14 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
       if (!alive) return;
 
       // Attach first — ring buffer replays at current dimensions
-      await invoke("attach_terminal", { id: ptyId, outputChannel: channel });
-      if (!alive) return;
-
-      attached = true;
+      await attachTerminalGeneration({
+        attach: () => invoke("attach_terminal", { id: ptyId, attachmentId, outputChannel: channel }),
+        detach: () => invoke("detach_terminal", { id: ptyId, attachmentId }),
+        isAlive: () => alive,
+        markAttached: () => { attached = true; },
+      });
+      if (!attached) return;
+      runLiveWriteRepair();
       setIsSessionReady(true);
 
       // Resize AFTER attach — shell redraws go directly to xterm (not buffered)
@@ -605,31 +662,28 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
       const captureSnapshot = (): string | null => {
         if (snapshotCaptured) return capturedSnapshot;
         snapshotCaptured = true;
-        if (attached && hasLiveData) {
+        if (shouldCaptureTerminalSnapshot(
+          attached,
+          hasLiveData,
+          snapshotEpoch,
+          readSnapshotEpoch(snapshotEpochRef),
+        )) {
           capturedSnapshot = serializeAddon.serialize({ scrollback: SNAPSHOT_SCROLLBACK_ROWS }) || null;
           onSnapshotCaptured(id, capturedSnapshot);
         }
         return capturedSnapshot;
       };
       if (attached) {
-        // Detach without unmount (live-budget eviction / attach staggering):
-        // keep a frozen visual of the terminal instead of a blank window.
-        if (isStillMounted()) {
-          appendTerminalGhost(container, term);
-          onGhosted(true);
-          // Hide the live element now — its dispose is deferred, and the
-          // ghost stacked on top would otherwise double-draw the same text.
-          if (term.element) term.element.style.visibility = "hidden";
-        }
-        invoke("detach_terminal", { id: ptyId }).catch(() => {});
+        invoke("detach_terminal", { id: ptyId, attachmentId }).catch(() => {});
       }
+      outputAcker.dispose();
       linkProviderDisposable.dispose();
       onDataDisposable.dispose();
       container.removeEventListener("mousedown", handleMouseZoom, true);
       container.removeEventListener("mousemove", handleMouseZoom, true);
       container.removeEventListener("mouseup", handleMouseZoom, true);
       unregisterVisibility(id);
-      clearLiveWriteRepairTimers();
+      liveWriteRepairScheduler.dispose();
       if (liveWriteRepairRaf !== null) {
         cancelAnimationFrame(liveWriteRepairRaf);
         liveWriteRepairRaf = null;
@@ -648,7 +702,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
       pendingDisposeRef.current = { term, timer, capture: captureSnapshot };
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- settings handled by separate effect; terminalSnapshot captured at mount via snapshotAtMount; link callbacks use refs to avoid remounting xterm; onPasteRequest/onSpawnError omitted — both are stable (useCallback with [] deps / useState setter)
-  }, [flushPendingDispose, id, isPtyReady, onGhosted, onSnapshotCaptured, shouldAttach]);
+  }, [flushPendingDispose, id, isPtyReady, onSnapshotCaptured, shouldAttach, terminalRenderer]);
 
   // Update terminal options when settings change
   useEffect(() => {

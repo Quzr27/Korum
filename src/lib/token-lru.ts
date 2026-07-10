@@ -5,8 +5,8 @@
  * on every watcher-driven re-read — for a large file that is tens to hundreds
  * of milliseconds of main-thread work per window. Caching by content keeps
  * remounts and unchanged-content refreshes free. The budget is expressed in
- * bytes of *source content* (token arrays scale roughly proportionally), so
- * a handful of large files cannot grow the cache without bound.
+ * an estimated heap weight supplied by the caller, so object-heavy values can
+ * be bounded more accurately than their source payload alone.
  */
 
 export interface TokenLRU<V> {
@@ -14,6 +14,43 @@ export interface TokenLRU<V> {
   set(key: string, value: V, bytes: number): void;
   readonly size: number;
   readonly bytes: number;
+}
+
+interface TokenCacheWeightToken {
+  content: string;
+  color?: string;
+}
+
+const JS_CHAR_BYTES = 2;
+const ARRAY_OVERHEAD_BYTES = 32;
+const ARRAY_SLOT_BYTES = 8;
+const TOKEN_OBJECT_OVERHEAD_BYTES = 64;
+
+/**
+ * Estimate the retained JS heap for a Shiki token result plus its source-based
+ * cache key. The estimate intentionally favors a stable upper bound over
+ * engine-specific precision: token objects and nested arrays dominate dense
+ * syntax-highlighted files, while UTF-16 string storage accounts for both the
+ * source key and token/color strings created by structured cloning.
+ */
+export function estimateTokenCacheBytes(
+  cacheKey: string,
+  lines: readonly (readonly TokenCacheWeightToken[])[],
+): number {
+  let bytes = cacheKey.length * JS_CHAR_BYTES
+    + ARRAY_OVERHEAD_BYTES
+    + lines.length * ARRAY_SLOT_BYTES;
+
+  for (const line of lines) {
+    bytes += ARRAY_OVERHEAD_BYTES + line.length * ARRAY_SLOT_BYTES;
+    for (const token of line) {
+      bytes += TOKEN_OBJECT_OVERHEAD_BYTES;
+      bytes += token.content.length * JS_CHAR_BYTES;
+      if (token.color) bytes += token.color.length * JS_CHAR_BYTES;
+    }
+  }
+
+  return bytes;
 }
 
 export function createTokenLRU<V>(maxBytes: number): TokenLRU<V> {
