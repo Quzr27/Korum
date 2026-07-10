@@ -1,9 +1,10 @@
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::ipc::{Channel, Response};
 
 /// Max buffered PTY output per terminal (~100KB ≈ 50 screens of text)
@@ -15,6 +16,23 @@ const MAX_BUFFER_SIZE: usize = 102_400;
 /// No coalescing loop needed: one read → one flush, zero stall risk.
 const READ_BUF_SIZE: usize = 32_768;
 
+/// Maximum raw channel payload bytes sent to the current frontend attachment
+/// but not yet acknowledged. Tauri stores larger raw channel payloads in an
+/// in-memory fetch queue, so the backend must bound this before calling send.
+const MAX_OUTSTANDING_BYTES: usize = 512 * 1024;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalExitedPayload {
+    pub pty_id: String,
+    pub exit_code: Option<u32>,
+}
+
+struct TerminalAttachment {
+    id: String,
+    channel: Channel<Response>,
+}
+
 struct TerminalStream {
     // Raw byte body: a `Channel<Vec<u8>>` would serialize each chunk as a JSON
     // number-array (the blanket `impl<T: Serialize> IpcResponse`), so a 32 KB
@@ -22,25 +40,24 @@ struct TerminalStream {
     // Sending `Response` (→ `InvokeResponseBody::Raw`) delivers a binary
     // ArrayBuffer instead: no JSON encode in Rust, no parse in JS, zero-copy
     // `new Uint8Array(buffer)` on the frontend.
-    channel: Option<Channel<Response>>,
+    attachment: Option<TerminalAttachment>,
+    outstanding_bytes: usize,
     replay: VecDeque<u8>,
     buffer: VecDeque<u8>,
     last_output_at: Option<u64>,
+}
+
+struct TerminalStreamState {
+    inner: Mutex<TerminalStream>,
+    credit_available: Condvar,
 }
 
 struct TerminalInstance {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
-    stream: Arc<Mutex<TerminalStream>>,
+    stream: Arc<TerminalStreamState>,
     cwd: Option<PathBuf>,
-    /// Flow-control gate for the read thread. When `true`, the reader stops
-    /// pulling from the PTY so the kernel buffer fills and the child process
-    /// blocks (natural backpressure). The frontend sets this when its xterm
-    /// parse buffer is backed up (see pause_read / resume_read) and clears it
-    /// as xterm drains, preventing unbounded IPC queue / memory growth on
-    /// floods (`yes`, huge `cat`, many busy agents).
-    read_pause: Arc<(Mutex<bool>, Condvar)>,
 }
 
 struct PtyStateInner {
@@ -95,36 +112,151 @@ fn decode_replay_tail(replay: &VecDeque<u8>, max_bytes: usize) -> String {
     }
 }
 
+impl TerminalStreamState {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(TerminalStream {
+                attachment: None,
+                outstanding_bytes: 0,
+                replay: VecDeque::new(),
+                buffer: VecDeque::new(),
+                last_output_at: None,
+            }),
+            credit_available: Condvar::new(),
+        }
+    }
+
+    fn attach(&self, attachment_id: String, channel: Channel<Response>) -> Result<(), String> {
+        let mut stream = self
+            .inner
+            .lock()
+            .map_err(|e| format!("lock poisoned: {e}"))?;
+
+        let buffered: Vec<u8> = stream.buffer.drain(..).collect();
+        stream.attachment = Some(TerminalAttachment {
+            id: attachment_id,
+            channel,
+        });
+        stream.outstanding_bytes = 0;
+        self.credit_available.notify_all();
+
+        if !buffered.is_empty() {
+            let send_failed = stream.attachment.as_ref().is_some_and(|attachment| {
+                attachment
+                    .channel
+                    .send(Response::new(buffered.clone()))
+                    .is_err()
+            });
+            if send_failed {
+                stream.attachment = None;
+                extend_buffer(&mut stream.buffer, &buffered);
+            } else {
+                stream.outstanding_bytes = buffered.len();
+            }
+        }
+        Ok(())
+    }
+
+    fn detach(&self, attachment_id: &str) -> Result<bool, String> {
+        let mut stream = self
+            .inner
+            .lock()
+            .map_err(|e| format!("lock poisoned: {e}"))?;
+        if stream
+            .attachment
+            .as_ref()
+            .is_none_or(|attachment| attachment.id != attachment_id)
+        {
+            return Ok(false);
+        }
+        stream.attachment = None;
+        stream.outstanding_bytes = 0;
+        self.credit_available.notify_all();
+        Ok(true)
+    }
+
+    fn acknowledge(&self, attachment_id: &str, bytes: usize) -> Result<bool, String> {
+        let mut stream = self
+            .inner
+            .lock()
+            .map_err(|e| format!("lock poisoned: {e}"))?;
+        if stream
+            .attachment
+            .as_ref()
+            .is_none_or(|attachment| attachment.id != attachment_id)
+        {
+            return Ok(false);
+        }
+        let previous = stream.outstanding_bytes;
+        stream.outstanding_bytes = stream.outstanding_bytes.saturating_sub(bytes);
+        if stream.outstanding_bytes < previous {
+            self.credit_available.notify_all();
+        }
+        Ok(true)
+    }
+
+    fn deactivate(&self) {
+        if let Ok(mut stream) = self.inner.lock() {
+            stream.attachment = None;
+            stream.outstanding_bytes = 0;
+        }
+        self.credit_available.notify_all();
+    }
+}
+
 /// Drain `batch` into the stream (replay + live channel / fallback buffer).
-/// SAFETY: Channel::send() is fire-and-forget in Tauri 2 (it `webview.eval()`s
-/// a callback, or for larger Raw payloads queues the bytes and evals a fetch —
-/// neither blocks on webview processing), so holding the stream mutex during
-/// send is safe and cannot deadlock.
-fn flush_batch(stream_ref: &Arc<Mutex<TerminalStream>>, batch: &mut Vec<u8>) {
+/// The current attachment may have at most `MAX_OUTSTANDING_BYTES` queued in
+/// Tauri. Waiting before `Channel::send` lets the kernel PTY buffer provide
+/// natural backpressure instead of allowing Tauri's raw-payload map to grow.
+fn flush_batch(stream_ref: &Arc<TerminalStreamState>, batch: &mut Vec<u8>) {
     if batch.is_empty() {
         return;
     }
-    let Ok(mut stream) = stream_ref.lock() else {
+    let Ok(mut stream) = stream_ref.inner.lock() else {
         batch.clear();
         return; // mutex poisoned — caller will break
     };
     extend_buffer(&mut stream.replay, batch);
     stream.last_output_at = Some(now_ms());
-    if let Some(ch) = stream.channel.as_ref() {
-        // take ownership: either the send succeeds or we need the data for
-        // the fallback buffer below, so swap out of batch unconditionally.
-        // `Response` is not `Clone`, so clone the bytes (cheap ≤32 KB memcpy)
-        // and reconstruct the Response per send; `payload` survives for the
-        // rare send-error fallback into the reattach buffer.
-        let payload = std::mem::take(batch);
-        if ch.send(Response::new(payload.clone())).is_err() {
-            // Channel closed — fall back to buffering
-            stream.channel = None;
-            extend_buffer(&mut stream.buffer, &payload);
+
+    loop {
+        if stream.attachment.is_none() {
+            extend_buffer(&mut stream.buffer, batch);
+            batch.clear();
+            return;
         }
-    } else {
-        extend_buffer(&mut stream.buffer, batch);
-        batch.clear();
+
+        if stream.outstanding_bytes.saturating_add(batch.len()) > MAX_OUTSTANDING_BYTES {
+            match stream_ref.credit_available.wait(stream) {
+                Ok(guard) => {
+                    stream = guard;
+                    continue;
+                }
+                Err(_) => {
+                    batch.clear();
+                    return;
+                }
+            }
+        }
+
+        // `Response` is not Clone. Keep a byte copy for the rare send-error
+        // fallback, which must be replayable by a later attachment.
+        let payload = std::mem::take(batch);
+        let send_failed = stream.attachment.as_ref().is_some_and(|attachment| {
+            attachment
+                .channel
+                .send(Response::new(payload.clone()))
+                .is_err()
+        });
+        if send_failed {
+            stream.attachment = None;
+            stream.outstanding_bytes = 0;
+            extend_buffer(&mut stream.buffer, &payload);
+            stream_ref.credit_available.notify_all();
+        } else {
+            stream.outstanding_bytes += payload.len();
+        }
+        return;
     }
 }
 
@@ -137,13 +269,17 @@ impl PtyState {
         }
     }
 
-    pub fn spawn(
+    pub fn spawn<F>(
         &self,
         shell: &str,
         cwd: Option<&str>,
         rows: u16,
         cols: u16,
-    ) -> Result<String, String> {
+        on_exit: F,
+    ) -> Result<String, String>
+    where
+        F: FnOnce(TerminalExitedPayload) + Send + 'static,
+    {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -166,9 +302,8 @@ impl PtyState {
             cmd.cwd(path);
         }
 
-        let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+        let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         let killer = child.clone_killer();
-        drop(child);
         drop(pair.slave);
 
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
@@ -176,17 +311,24 @@ impl PtyState {
 
         let id = uuid::Uuid::new_v4().to_string();
 
-        let stream = Arc::new(Mutex::new(TerminalStream {
-            channel: None,
-            replay: VecDeque::new(),
-            buffer: VecDeque::new(),
-            last_output_at: None,
-        }));
+        let stream = Arc::new(TerminalStreamState::new());
 
-        let read_pause = Arc::new((Mutex::new(false), Condvar::new()));
+        let instance = TerminalInstance {
+            writer: Arc::new(Mutex::new(writer)),
+            master: Arc::new(Mutex::new(pair.master)),
+            killer,
+            stream: Arc::clone(&stream),
+            cwd: cwd_path,
+        };
 
+        self.inner
+            .terminals
+            .lock()
+            .map_err(|e| format!("lock poisoned: {e}"))?
+            .insert(id.clone(), instance);
+
+        let (reader_done_tx, reader_done_rx) = std::sync::mpsc::sync_channel(1);
         let stream_ref = Arc::clone(&stream);
-        let pause_pair = Arc::clone(&read_pause);
         std::thread::spawn(move || {
             // One blocking read per iteration — the kernel returns whatever is
             // queued (up to READ_BUF_SIZE), so bursts arrive in large chunks
@@ -195,21 +337,6 @@ impl PtyState {
             // full 32 KB allocation.
             let mut buf = [0u8; READ_BUF_SIZE];
             loop {
-                // Flow control: block here while the frontend has paused us
-                // because its xterm parse buffer is backed up. Not reading lets
-                // the kernel PTY buffer fill so the child blocks. `wait_timeout`
-                // is only a missed-notify safety net — we keep waiting until the
-                // flag actually clears, so a flood can never slip through.
-                {
-                    let (lock, cvar) = &*pause_pair;
-                    let Ok(mut paused) = lock.lock() else { break };
-                    while *paused {
-                        match cvar.wait_timeout(paused, Duration::from_millis(200)) {
-                            Ok((guard, _)) => paused = guard,
-                            Err(_) => return,
-                        }
-                    }
-                }
                 match reader.read(&mut buf) {
                     Ok(0) => break, // EOF
                     Ok(n) => {
@@ -219,28 +346,47 @@ impl PtyState {
                     Err(_) => break,
                 }
             }
+            let _ = reader_done_tx.send(());
         });
 
-        let instance = TerminalInstance {
-            writer: Arc::new(Mutex::new(writer)),
-            master: Arc::new(Mutex::new(pair.master)),
-            killer,
-            stream,
-            cwd: cwd_path,
-            read_pause,
-        };
+        // Keep ownership of `child` in a dedicated waiter. Dropping it without
+        // wait leaves a zombie on Unix. The waiter also removes completed PTYs
+        // from backend state and wakes any reader blocked on frontend credit.
+        let state = self.clone();
+        let exited_id = id.clone();
+        std::thread::spawn(move || {
+            let exit_code = child.wait().ok().map(|status| status.exit_code());
+            // Normally the PTY reader observes EOF immediately after the child
+            // exits. Give it a short bounded window to deliver final command
+            // output before detaching the channel and announcing the stopped
+            // session. Descendants may inherit the PTY, so never wait forever.
+            let _ = reader_done_rx.recv_timeout(std::time::Duration::from_millis(250));
+            let removed = state
+                .inner
+                .terminals
+                .lock()
+                .ok()
+                .and_then(|mut terminals| terminals.remove(&exited_id));
+            if let Some(instance) = removed {
+                instance.stream.deactivate();
+            } else {
+                stream.deactivate();
+            }
+            on_exit(TerminalExitedPayload {
+                pty_id: exited_id,
+                exit_code,
+            });
+        });
 
-        self.inner
-            .terminals
-            .lock()
-            .map_err(|e| format!("lock poisoned: {e}"))?
-            .insert(id.clone(), instance);
         Ok(id)
     }
 
-    pub fn attach(&self, id: &str, channel: Channel<Response>) -> Result<(), String> {
-        // Clone the stream Arc, then release the outer terminals lock before
-        // acquiring the inner stream lock. This prevents nested-lock risk.
+    pub fn attach(
+        &self,
+        id: &str,
+        attachment_id: String,
+        channel: Channel<Response>,
+    ) -> Result<(), String> {
         let stream_arc = {
             let terminals = self
                 .inner
@@ -249,74 +395,10 @@ impl PtyState {
                 .map_err(|e| format!("lock poisoned: {e}"))?;
             Arc::clone(&terminals.get(id).ok_or("Terminal not found")?.stream)
         };
-
-        let mut stream = stream_arc
-            .lock()
-            .map_err(|e| format!("lock poisoned: {e}"))?;
-
-        // Drain buffer for replay
-        let buffered: Vec<u8> = stream.buffer.drain(..).collect();
-
-        // Set live channel before replay — ensures no gap between replay and
-        // live data (read thread is blocked on this same lock).
-        stream.channel = Some(channel);
-
-        // Replay buffered output to the newly attached channel
-        if !buffered.is_empty() {
-            let send_failed = match stream.channel.as_ref() {
-                Some(ch) => ch.send(Response::new(buffered.clone())).is_err(),
-                None => false,
-            };
-            if send_failed {
-                // Channel broke before the replay landed — re-buffer it so the
-                // next attach replays it instead of losing it (mirror flush_batch).
-                stream.channel = None;
-                extend_buffer(&mut stream.buffer, &buffered);
-            }
-        }
-        drop(stream);
-
-        // A fresh attach starts unpaused — clear any flow-control pause left by
-        // a prior session so the read thread streams again.
-        self.set_read_paused(id, false);
-        Ok(())
+        stream_arc.attach(attachment_id, channel)
     }
 
-    /// Pause the read thread (frontend flow control: its xterm parse buffer is
-    /// backed up). The kernel PTY buffer then fills and the child blocks.
-    pub fn pause_read(&self, id: &str) -> Result<(), String> {
-        self.set_read_paused(id, true);
-        Ok(())
-    }
-
-    /// Resume a paused read thread once the frontend has drained.
-    pub fn resume_read(&self, id: &str) -> Result<(), String> {
-        self.set_read_paused(id, false);
-        Ok(())
-    }
-
-    fn set_read_paused(&self, id: &str, paused: bool) {
-        // Clone the pause Arc out under the terminals lock, then release it
-        // before touching the pause mutex (terminals → pause lock order only).
-        let pair = {
-            let Ok(terminals) = self.inner.terminals.lock() else {
-                return;
-            };
-            let Some(instance) = terminals.get(id) else {
-                return;
-            };
-            Arc::clone(&instance.read_pause)
-        };
-        let (lock, cvar) = &*pair;
-        if let Ok(mut guard) = lock.lock() {
-            *guard = paused;
-        }
-        if !paused {
-            cvar.notify_all();
-        }
-    }
-
-    pub fn detach(&self, id: &str) -> Result<(), String> {
+    pub fn detach(&self, id: &str, attachment_id: &str) -> Result<(), String> {
         let stream_arc = {
             let terminals = self
                 .inner
@@ -325,18 +407,20 @@ impl PtyState {
                 .map_err(|e| format!("lock poisoned: {e}"))?;
             Arc::clone(&terminals.get(id).ok_or("Terminal not found")?.stream)
         };
+        stream_arc.detach(attachment_id)?;
+        Ok(())
+    }
 
-        {
-            let mut stream = stream_arc
+    pub fn acknowledge(&self, id: &str, attachment_id: &str, bytes: usize) -> Result<(), String> {
+        let stream_arc = {
+            let terminals = self
+                .inner
+                .terminals
                 .lock()
                 .map_err(|e| format!("lock poisoned: {e}"))?;
-            // Remove channel — read thread switches to buffering
-            stream.channel = None;
-        }
-
-        // A detached terminal keeps buffering recent output for replay/preview,
-        // so it must not stay paused by stale frontend flow control.
-        self.set_read_paused(id, false);
+            Arc::clone(&terminals.get(id).ok_or("Terminal not found")?.stream)
+        };
+        stream_arc.acknowledge(attachment_id, bytes)?;
         Ok(())
     }
 
@@ -378,23 +462,19 @@ impl PtyState {
     }
 
     pub fn kill(&self, id: &str) -> Result<(), String> {
-        let instance = self
+        let mut terminals = self
             .inner
             .terminals
             .lock()
-            .map_err(|e| format!("lock poisoned: {e}"))?
-            .remove(id);
-        if let Some(mut inst) = instance {
-            // Wake a paused reader so it observes the kill (EOF) and exits
-            // instead of parking on the flow-control condvar.
-            {
-                let (lock, cvar) = &*inst.read_pause;
-                if let Ok(mut paused) = lock.lock() {
-                    *paused = false;
-                }
-                cvar.notify_all();
-            }
-            let _ = inst.killer.kill();
+            .map_err(|e| format!("lock poisoned: {e}"))?;
+        if let Some(instance) = terminals.get_mut(id) {
+            // Detach and reset credit before killing so a reader waiting for an
+            // ACK wakes and falls back to the bounded detached buffer.
+            instance.stream.deactivate();
+            // Keep the instance addressable until the waiter reaps and removes
+            // it. If signalling fails, propagate the error so the frontend can
+            // restore the session instead of silently orphaning a live child.
+            instance.killer.kill().map_err(|error| error.to_string())?;
         }
         Ok(())
     }
@@ -413,6 +493,7 @@ impl PtyState {
 
         let raw = {
             let stream = stream_arc
+                .inner
                 .lock()
                 .map_err(|e| format!("lock poisoned: {e}"))?;
             let (front, back) = stream.replay.as_slices();
@@ -459,6 +540,7 @@ impl PtyState {
 
         let (scrollback, last_output_at) = {
             let stream = stream_arc
+                .inner
                 .lock()
                 .map_err(|e| format!("lock poisoned: {e}"))?;
             // Agent status only needs recent bottom-of-buffer markers. Decode a
@@ -499,6 +581,26 @@ pub(crate) fn preview_tail(stripped: &str, max_lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    fn accepting_channel() -> Channel<Response> {
+        Channel::new(|_| Ok(()))
+    }
+
+    #[test]
+    fn terminal_exited_payload_serializes_for_frontend_contract() {
+        let payload = TerminalExitedPayload {
+            pty_id: "pty-123".to_string(),
+            exit_code: Some(7),
+        };
+
+        assert_eq!(
+            serde_json::to_value(payload).unwrap(),
+            serde_json::json!({ "ptyId": "pty-123", "exitCode": 7 })
+        );
+    }
 
     #[test]
     fn preview_tail_takes_last_lines_and_trims_trailing_blanks() {
@@ -577,41 +679,30 @@ mod tests {
 
     #[test]
     fn stream_buffers_when_no_channel() {
-        let stream = Arc::new(Mutex::new(TerminalStream {
-            channel: None,
-            replay: VecDeque::new(),
-            buffer: VecDeque::new(),
-            last_output_at: None,
-        }));
+        let stream = Arc::new(TerminalStreamState::new());
 
         {
-            let mut s = stream.lock().unwrap();
+            let mut s = stream.inner.lock().unwrap();
             extend_buffer(&mut s.buffer, b"buffered data");
         }
 
-        let s = stream.lock().unwrap();
+        let s = stream.inner.lock().unwrap();
         assert_eq!(s.buffer.len(), 13);
-        assert!(s.channel.is_none());
+        assert!(s.attachment.is_none());
     }
 
     #[test]
     fn detach_preserves_buffer() {
-        let stream = Arc::new(Mutex::new(TerminalStream {
-            channel: None,
-            replay: VecDeque::new(),
-            buffer: VecDeque::from(b"existing data".to_vec()),
-            last_output_at: None,
-        }));
+        let stream = TerminalStreamState::new();
 
-        // Simulate detach: set channel to None
         {
-            let mut s = stream.lock().unwrap();
-            s.channel = None;
+            let mut s = stream.inner.lock().unwrap();
+            s.buffer = VecDeque::from(b"existing data".to_vec());
         }
+        assert!(!stream.detach("stale").unwrap());
 
-        // Buffer should be preserved
-        let s = stream.lock().unwrap();
-        assert!(s.channel.is_none());
+        let s = stream.inner.lock().unwrap();
+        assert!(s.attachment.is_none());
         assert_eq!(s.buffer.len(), 13);
     }
 
@@ -656,16 +747,11 @@ mod tests {
 
     #[test]
     fn flush_batch_writes_to_replay_and_buffer_without_channel() {
-        let stream = Arc::new(Mutex::new(TerminalStream {
-            channel: None,
-            replay: VecDeque::new(),
-            buffer: VecDeque::new(),
-            last_output_at: None,
-        }));
+        let stream = Arc::new(TerminalStreamState::new());
         let mut batch = b"hello coalesced".to_vec();
         flush_batch(&stream, &mut batch);
         assert!(batch.is_empty(), "batch should be cleared after flush");
-        let s = stream.lock().unwrap();
+        let s = stream.inner.lock().unwrap();
         assert_eq!(
             s.replay.iter().copied().collect::<Vec<_>>(),
             b"hello coalesced"
@@ -679,17 +765,158 @@ mod tests {
 
     #[test]
     fn flush_batch_is_noop_on_empty_batch() {
-        let stream = Arc::new(Mutex::new(TerminalStream {
-            channel: None,
-            replay: VecDeque::new(),
-            buffer: VecDeque::new(),
-            last_output_at: None,
-        }));
+        let stream = Arc::new(TerminalStreamState::new());
         let mut batch: Vec<u8> = Vec::new();
         flush_batch(&stream, &mut batch);
-        let s = stream.lock().unwrap();
+        let s = stream.inner.lock().unwrap();
         assert!(s.replay.is_empty());
         assert!(s.last_output_at.is_none());
+    }
+
+    #[test]
+    fn stale_detach_and_ack_do_not_affect_current_attachment() {
+        let stream = TerminalStreamState::new();
+        stream
+            .attach("first".to_string(), accepting_channel())
+            .unwrap();
+        stream
+            .attach("second".to_string(), accepting_channel())
+            .unwrap();
+        {
+            let mut inner = stream.inner.lock().unwrap();
+            inner.outstanding_bytes = 42_000;
+        }
+
+        assert!(!stream.detach("first").unwrap());
+        assert!(!stream.acknowledge("first", 42_000).unwrap());
+        {
+            let inner = stream.inner.lock().unwrap();
+            assert_eq!(inner.outstanding_bytes, 42_000);
+            assert_eq!(
+                inner
+                    .attachment
+                    .as_ref()
+                    .map(|attachment| attachment.id.as_str()),
+                Some("second")
+            );
+        }
+
+        assert!(stream.detach("second").unwrap());
+        let inner = stream.inner.lock().unwrap();
+        assert!(inner.attachment.is_none());
+        assert_eq!(inner.outstanding_bytes, 0);
+    }
+
+    #[test]
+    fn output_waits_at_credit_limit_until_current_attachment_acks() {
+        let stream = Arc::new(TerminalStreamState::new());
+        stream
+            .attach("current".to_string(), accepting_channel())
+            .unwrap();
+        stream.inner.lock().unwrap().outstanding_bytes = MAX_OUTSTANDING_BYTES;
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker_stream = Arc::clone(&stream);
+        thread::spawn(move || {
+            let mut payload = vec![b'x'; READ_BUF_SIZE];
+            flush_batch(&worker_stream, &mut payload);
+            done_tx.send(()).unwrap();
+        });
+
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(!stream.acknowledge("stale", READ_BUF_SIZE).unwrap());
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+        assert!(stream.acknowledge("current", READ_BUF_SIZE).unwrap());
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("ACK should release the credit-blocked writer");
+        assert_eq!(
+            stream.inner.lock().unwrap().outstanding_bytes,
+            MAX_OUTSTANDING_BYTES
+        );
+    }
+
+    #[test]
+    fn detach_wakes_credit_waiter_and_buffers_payload() {
+        let stream = Arc::new(TerminalStreamState::new());
+        stream
+            .attach("current".to_string(), accepting_channel())
+            .unwrap();
+        stream.inner.lock().unwrap().outstanding_bytes = MAX_OUTSTANDING_BYTES;
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker_stream = Arc::clone(&stream);
+        thread::spawn(move || {
+            let mut payload = b"pending".to_vec();
+            flush_batch(&worker_stream, &mut payload);
+            done_tx.send(()).unwrap();
+        });
+
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(stream.detach("current").unwrap());
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("detach should release the credit-blocked writer");
+
+        let inner = stream.inner.lock().unwrap();
+        assert_eq!(inner.buffer.iter().copied().collect::<Vec<_>>(), b"pending");
+        assert_eq!(inner.outstanding_bytes, 0);
+    }
+
+    #[test]
+    fn deactivate_wakes_credit_waiter_and_buffers_payload() {
+        let stream = Arc::new(TerminalStreamState::new());
+        stream
+            .attach("current".to_string(), accepting_channel())
+            .unwrap();
+        stream.inner.lock().unwrap().outstanding_bytes = MAX_OUTSTANDING_BYTES;
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker_stream = Arc::clone(&stream);
+        thread::spawn(move || {
+            let mut payload = b"pending after kill".to_vec();
+            flush_batch(&worker_stream, &mut payload);
+            done_tx.send(()).unwrap();
+        });
+
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        stream.deactivate();
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("kill/exit deactivation should release the credit-blocked writer");
+
+        let inner = stream.inner.lock().unwrap();
+        assert_eq!(
+            inner.buffer.iter().copied().collect::<Vec<_>>(),
+            b"pending after kill"
+        );
+        assert_eq!(inner.outstanding_bytes, 0);
+    }
+
+    #[test]
+    fn exited_child_is_reaped_removed_and_reported() {
+        let false_path = ["/usr/bin/false", "/bin/false"]
+            .into_iter()
+            .find(|path| std::path::Path::new(path).exists())
+            .expect("false executable should exist");
+        let state = PtyState::new();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        let id = state
+            .spawn(false_path, None, 24, 80, move |payload| {
+                exit_tx.send(payload).unwrap();
+            })
+            .unwrap();
+
+        let payload = exit_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("short-lived PTY child should be waited and reported");
+        assert_eq!(payload.pty_id, id);
+        assert!(payload.exit_code.is_some_and(|code| code != 0));
+        assert!(
+            state.preview(&id, 10).is_err(),
+            "exited PTY must be removed"
+        );
     }
 
     #[test]

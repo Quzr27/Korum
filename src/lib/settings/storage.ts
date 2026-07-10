@@ -1,6 +1,6 @@
 // ── Settings validation, parsing, and localStorage helpers ──
 
-import type { Settings, BaseColor, CodeTheme, CanvasAtmosphere, RadiusPreset, ZoomSpeed } from "./types";
+import type { Settings, BaseColor, CodeTheme, CanvasAtmosphere, RadiusPreset, TerminalRenderer, ZoomSpeed } from "./types";
 import {
   DEFAULT_SETTINGS,
   BASE_COLOR_LABELS,
@@ -34,6 +34,9 @@ export function validateSettings(raw: unknown): Settings {
     terminalFontSize: typeof p.terminalFontSize === "number" && p.terminalFontSize >= 10 && p.terminalFontSize <= 30
       ? p.terminalFontSize : DEFAULT_SETTINGS.terminalFontSize,
     terminalTheme: normalizeTerminalTheme(p.terminalTheme),
+    terminalRenderer: p.terminalRenderer === "auto" || p.terminalRenderer === "dom"
+      ? p.terminalRenderer as TerminalRenderer
+      : DEFAULT_SETTINGS.terminalRenderer,
     codeTheme: typeof p.codeTheme === "string" && (CODE_THEMES as readonly string[]).includes(p.codeTheme)
       ? p.codeTheme as CodeTheme : DEFAULT_SETTINGS.codeTheme,
     canvasAtmosphere:
@@ -67,6 +70,12 @@ export function parseSettings(raw: unknown): { settings: Settings; isFullyValid:
       (TERMINAL_THEMES as readonly string[]).includes(p.terminalTheme) ||
       p.terminalTheme in LEGACY_TERMINAL_THEME_MIGRATIONS
     );
+  // terminalRenderer: treat missing field as valid for settings written before
+  // the CanvasAddon preference existed.
+  const isTerminalRendererValid =
+    p.terminalRenderer === undefined ||
+    p.terminalRenderer === "auto" ||
+    p.terminalRenderer === "dom";
   // canvasAtmosphere: treat missing field as valid (new field, existing settings files won't have it)
   const isCanvasAtmosphereValid =
     p.canvasAtmosphere === undefined ||
@@ -88,6 +97,7 @@ export function parseSettings(raw: unknown): { settings: Settings; isFullyValid:
       isTerminalFontValid &&
       isTerminalFontSizeValid &&
       isTerminalThemeValid &&
+      isTerminalRendererValid &&
       isCodeThemeValid &&
       isCanvasAtmosphereValid &&
       isZoomSpeedValid &&

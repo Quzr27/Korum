@@ -44,6 +44,11 @@ import { startWindowDragFromMouseDown } from "@/lib/window-drag";
 import { createDemoWorkspaceTemplate } from "@/lib/demo-workspace-template";
 import { activateDemoTerminalWindow } from "@/lib/demo-terminal-activation";
 import {
+  clearTerminalPtyIds,
+  getWorkspaceTerminalsToStop,
+  rejectStoppedTerminalSpawn,
+} from "@/lib/terminal-session-lifecycle";
+import {
   buildImportedKorumLayout,
   buildImportedLayout,
   createKorumLayoutPackage,
@@ -73,12 +78,34 @@ interface CodeOpenTarget {
   viewMode?: CodeViewMode;
 }
 
+interface TerminalExitedPayload {
+  ptyId: string;
+  exitCode: number | null;
+}
+
 const SIDEBAR_RIGHT_EDGE = 288 + 24; // w-72 (288px) docked at left-0 + gap (24px)
 const TITLEBAR_DRAG_HEIGHT = 40; // keep in sync with --app-titlebar-drag-height in app.css
 const GRID_TOP = TITLEBAR_DRAG_HEIGHT + 4; // keep arranged windows just below the top drag strip
 const CODE_WINDOW_WIDTH = 820;
 const CODE_WINDOW_HEIGHT = 600;
-const WORKTREE_INFO_REFRESH_MS = 2_500;
+const WORKTREE_INFO_REFRESH_MS = 15_000;
+const TERMINAL_EXITED_EVENT = "terminal-exited";
+
+async function killTerminalWithRetry(ptyId: string, attempts = 3): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await invoke("kill_terminal", { id: ptyId });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 50 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastError;
+}
 
 function getOpenFileDrawerWidth(): number {
   return document.querySelector<HTMLElement>('.sidebar-file-drawer[data-state="open"]')
@@ -119,6 +146,7 @@ export default function App() {
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
   const [hydratedTerminalIds, setHydratedTerminalIds] = useState<Set<string>>(() => new Set());
   const [bootingTerminalIds, setBootingTerminalIds] = useState<Set<string>>(() => new Set());
+  const [stoppedTerminalIds, setStoppedTerminalIds] = useState<Set<string>>(() => new Set());
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [quitDialogOpen, setQuitDialogOpen] = useState(false);
   const [isQuitting, setIsQuitting] = useState(false);
@@ -158,6 +186,8 @@ export default function App() {
   const bootingTerminalIdsRef = useRef(new Set<string>());
   const terminalSnapshotsRef = useRef<Record<string, string>>({});
   const pendingTerminalStartCommandsRef = useRef(new Map<string, string>());
+  const stoppedTerminalIdsRef = useRef(new Set<string>());
+  const stoppingTerminalIdsRef = useRef(new Set<string>());
   const worktreeInfoRequestsRef = useRef<Map<string, Promise<WorktreeInfo | null | undefined>>>(new Map());
   const worktreeInfoCheckedAtRef = useRef<Record<string, number>>({});
   const terminalCwdByIdRef = useRef<Record<string, string>>({});
@@ -169,6 +199,7 @@ export default function App() {
   const stateRef = useRef<AppSnapshot>({ workspaces, windows, activeWorkspaceId, pan, zoom });
   stateRef.current = { workspaces, windows, activeWorkspaceId, pan, zoom };
   terminalCwdByIdRef.current = terminalCwdById;
+  stoppedTerminalIdsRef.current = stoppedTerminalIds;
 
   // ── Pending z-index overrides (avoids direct mutation of state objects) ──
   const pendingZIndexRef = useRef<Map<string, number>>(new Map());
@@ -326,6 +357,9 @@ export default function App() {
       pendingTerminalStartCommandsRef.current = new Map();
       setHydratedTerminalIds(new Set());
       setBootingTerminalIds(new Set());
+      stoppedTerminalIdsRef.current = new Set();
+      stoppingTerminalIdsRef.current = new Set();
+      setStoppedTerminalIds(new Set());
       countsRef.current = { terminal: 0, note: 0, code: 0 };
       setPan({ x: 0, y: 0 });
       setZoom(1);
@@ -392,6 +426,44 @@ export default function App() {
   }, [mergeAgentStatuses]);
 
   useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+
+    listen<TerminalExitedPayload>(TERMINAL_EXITED_EVENT, (event) => {
+      if (!alive) return;
+      const terminal = stateRef.current.windows.find((window) => (
+        window.type === "terminal" && window.ptyId === event.payload.ptyId
+      ));
+      if (!terminal) return;
+
+      invoke("unregister_agent_terminal", { terminalId: terminal.id }).catch(() => {});
+      clearAgentStatus(terminal.id);
+      delete terminalSnapshotsRef.current[terminal.id];
+      if (!stoppedTerminalIdsRef.current.has(terminal.id)) {
+        const next = new Set(stoppedTerminalIdsRef.current);
+        next.add(terminal.id);
+        stoppedTerminalIdsRef.current = next;
+        setStoppedTerminalIds(next);
+      }
+      setWindows((prev) => prev.map((window) => (
+        window.type === "terminal" && window.id === terminal.id && window.ptyId === event.payload.ptyId
+          ? { ...window, ptyId: undefined }
+          : window
+      )));
+    }).then((fn) => {
+      if (alive) unlisten = fn;
+      else fn();
+    }).catch((error) => {
+      console.warn("[terminal] Exit listener failed:", error);
+    });
+
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [clearAgentStatus]);
+
+  useEffect(() => {
     applyAgentStatusesToDom();
   }, [activeWorkspaceId, activeWindowId, applyAgentStatusesToDom, pan.x, pan.y, windows, zoom]);
 
@@ -406,6 +478,17 @@ export default function App() {
         Object.entries(prev).filter(([terminalId]) => terminalIds.has(terminalId)),
       );
       return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+  }, [windows]);
+
+  useEffect(() => {
+    const terminalIds = new Set(
+      windows.filter((window) => window.type === "terminal").map((window) => window.id),
+    );
+    setStoppedTerminalIds((prev) => {
+      const next = new Set([...prev].filter((id) => terminalIds.has(id)));
+      stoppedTerminalIdsRef.current = next;
+      return next.size === prev.size ? prev : next;
     });
   }, [windows]);
 
@@ -852,6 +935,26 @@ export default function App() {
   /** Called by TerminalWindow when PTY spawns — stores ptyId in-memory (not persisted). */
   const handlePtySpawned = useCallback((windowId: string, ptyId: string | null) => {
     const terminalWindow = stateRef.current.windows.find((w) => w.id === windowId && w.type === "terminal");
+    const blockedTerminalIds = stoppingTerminalIdsRef.current.has(windowId)
+      ? stoppingTerminalIdsRef.current
+      : stoppedTerminalIdsRef.current;
+    if (rejectStoppedTerminalSpawn({
+      terminalId: windowId,
+      ptyId,
+      stoppedTerminalIds: blockedTerminalIds,
+      kill: (latePtyId) => {
+        void killTerminalWithRetry(latePtyId).catch((error) => {
+          console.error(`[terminal] Failed to kill late stopped PTY ${latePtyId}:`, error);
+        });
+      },
+      unregister: (terminalId) => { invoke("unregister_agent_terminal", { terminalId }).catch(() => {}); },
+      clearStatus: clearAgentStatus,
+    })) {
+      // Stop can win while create_terminal is in flight, before React commits
+      // the stopped prop and runs TerminalWindow's effect cleanup. Never let
+      // that late PTY revive a stopped session.
+      return;
+    }
     if (ptyId && terminalWindow?.type === "terminal") {
       const workspace = stateRef.current.workspaces.find((ws) => ws.id === terminalWindow.workspaceId);
       invoke("register_agent_terminal", {
@@ -885,6 +988,83 @@ export default function App() {
     // No save — ptyId is session-ephemeral
   }, [clearAgentStatus]);
 
+  const stopWorkspaceTerminals = useCallback((workspaceId: string) => {
+    const unavailableIds = new Set([
+      ...stoppedTerminalIdsRef.current,
+      ...stoppingTerminalIdsRef.current,
+    ]);
+    const targets = getWorkspaceTerminalsToStop(
+      stateRef.current.windows,
+      workspaceId,
+      unavailableIds,
+    );
+    if (targets.length === 0) return;
+
+    const coldTargets = targets.filter((terminal) => !terminal.ptyId);
+    const runningTargets = targets.filter((terminal) => terminal.ptyId);
+    for (const terminal of coldTargets) {
+      invoke("unregister_agent_terminal", { terminalId: terminal.id }).catch(() => {});
+      clearAgentStatus(terminal.id);
+      delete terminalSnapshotsRef.current[terminal.id];
+    }
+    for (const terminal of runningTargets) delete terminalSnapshotsRef.current[terminal.id];
+
+    if (coldTargets.length > 0) {
+      const coldIds = new Set(coldTargets.map((terminal) => terminal.id));
+      const nextStopped = new Set([...stoppedTerminalIdsRef.current, ...coldIds]);
+      stoppedTerminalIdsRef.current = nextStopped;
+      setStoppedTerminalIds(nextStopped);
+      setWindows((prev) => clearTerminalPtyIds(prev, coldIds));
+    }
+
+    if (runningTargets.length === 0) return;
+    for (const terminal of runningTargets) stoppingTerminalIdsRef.current.add(terminal.id);
+    void Promise.all(runningTargets.map(async (terminal) => {
+      try {
+        await killTerminalWithRetry(terminal.ptyId!);
+        return { terminal, killed: true } as const;
+      } catch (error) {
+        console.warn(`[terminal] Failed to stop ${terminal.id}:`, error);
+        return { terminal, killed: false } as const;
+      }
+    })).then((results) => {
+      const killedIds = new Set<string>();
+      for (const result of results) {
+        stoppingTerminalIdsRef.current.delete(result.terminal.id);
+        if (!result.killed) continue;
+        killedIds.add(result.terminal.id);
+        invoke("unregister_agent_terminal", { terminalId: result.terminal.id }).catch(() => {});
+        clearAgentStatus(result.terminal.id);
+      }
+      if (killedIds.size === 0) return;
+      const nextStopped = new Set([...stoppedTerminalIdsRef.current, ...killedIds]);
+      stoppedTerminalIdsRef.current = nextStopped;
+      setStoppedTerminalIds(nextStopped);
+      setWindows((prev) => clearTerminalPtyIds(prev, killedIds));
+    });
+  }, [clearAgentStatus]);
+
+  const restartWorkspaceTerminals = useCallback((workspaceId: string) => {
+    const workspaceTerminalIds = new Set(
+      stateRef.current.windows
+        .filter((window) => window.type === "terminal" && window.workspaceId === workspaceId)
+        .map((window) => window.id),
+    );
+    const next = new Set(stoppedTerminalIdsRef.current);
+    for (const id of workspaceTerminalIds) next.delete(id);
+    if (next.size === stoppedTerminalIdsRef.current.size) return;
+    stoppedTerminalIdsRef.current = next;
+    setStoppedTerminalIds(next);
+  }, []);
+
+  const restartTerminal = useCallback((id: string) => {
+    if (!stoppedTerminalIdsRef.current.has(id)) return;
+    const next = new Set(stoppedTerminalIdsRef.current);
+    next.delete(id);
+    stoppedTerminalIdsRef.current = next;
+    setStoppedTerminalIds(next);
+  }, []);
+
   const activateDemoTerminal = useCallback((id: string) => {
     const win = stateRef.current.windows.find((window) => window.id === id);
     if (!win || win.type !== "terminal" || !win.demoContent) return;
@@ -904,7 +1084,8 @@ export default function App() {
   }, [saveAfterUpdate]);
 
   const handleTerminalSnapshotCaptured = useCallback((windowId: string, snapshot: string | null) => {
-    if (snapshot) {
+    const windowExists = stateRef.current.windows.some((window) => window.id === windowId);
+    if (snapshot && windowExists && !stoppedTerminalIdsRef.current.has(windowId)) {
       terminalSnapshotsRef.current[windowId] = snapshot;
     } else {
       delete terminalSnapshotsRef.current[windowId];
@@ -1501,6 +1682,14 @@ export default function App() {
     }));
   }, [getWorktreeForWindow, windows, workspaces]);
 
+  const runningTerminalIds = useMemo(() => new Set(
+    windows
+      .filter((window) => (
+        window.type === "terminal" && !stoppedTerminalIds.has(window.id)
+      ))
+      .map((window) => window.id),
+  ), [stoppedTerminalIds, windows]);
+
   // ── Loading screen ──
   if (!loaded) {
     return (
@@ -1530,6 +1719,7 @@ export default function App() {
         activeWindowId={activeWindowId}
         hydratedTerminalIds={hydratedTerminalIds}
         bootingTerminalIds={bootingTerminalIds}
+        stoppedTerminalIds={stoppedTerminalIds}
         pan={pan}
         zoom={zoom}
         onPanChange={setPan}
@@ -1552,6 +1742,7 @@ export default function App() {
         onOpenTerminalFileLink={openTerminalFileLink}
         onViewModeChange={setCodeViewMode}
         onActivateDemoTerminal={activateDemoTerminal}
+        onRestartTerminal={restartTerminal}
       />
 
       {hasWorkspaces ? (
@@ -1566,6 +1757,8 @@ export default function App() {
             workspaces={workspaces}
             activeWorkspaceId={activeWorkspaceId}
             activeWindowId={activeWindowId}
+            runningTerminalIds={runningTerminalIds}
+            stoppedTerminalIds={stoppedTerminalIds}
             onCreateDialogChange={setCreateDialogOpen}
             onModalOpenChange={setSidebarModalOpen}
             onFocusWindow={focusWindowFromSidebar}
@@ -1579,6 +1772,8 @@ export default function App() {
             onRenameWindow={renameWindow}
             onRemoveWindow={removeWindow}
             onOpenFile={openSidebarFile}
+            onStopWorkspaceTerminals={stopWorkspaceTerminals}
+            onRestartWorkspaceTerminals={restartWorkspaceTerminals}
           />
         </div>
       ) : null}

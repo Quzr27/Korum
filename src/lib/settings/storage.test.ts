@@ -41,6 +41,7 @@ describe("validateSettings", () => {
       terminalFont: "IBM Plex Mono",
       terminalFontSize: 16,
       terminalTheme: "dracula",
+      terminalRenderer: "dom",
       codeTheme: "dracula",
       canvasAtmosphere: "blueprint",
       zoomSpeed: 2,
@@ -139,6 +140,12 @@ describe("validateSettings", () => {
     );
   });
 
+  it("validates terminalRenderer and defaults invalid values to auto", () => {
+    expect(validateSettings({ terminalRenderer: "auto" }).terminalRenderer).toBe("auto");
+    expect(validateSettings({ terminalRenderer: "dom" }).terminalRenderer).toBe("dom");
+    expect(validateSettings({ terminalRenderer: "webgl" }).terminalRenderer).toBe("auto");
+  });
+
   it("migrates legacy terminal themes", () => {
     expect(validateSettings({ terminalTheme: "nord" }).terminalTheme).toBe("ocean");
     expect(validateSettings({ terminalTheme: "tokyo-night" }).terminalTheme).toBe("oceanic-next");
@@ -187,6 +194,7 @@ describe("parseSettings", () => {
       terminalFont: "JetBrains Mono",
       terminalFontSize: 13,
       terminalTheme: "oceanic-next",
+      terminalRenderer: "auto",
       codeTheme: "github-dark",
       canvasAtmosphere: "signal",
       zoomSpeed: 1,
@@ -233,6 +241,16 @@ describe("parseSettings", () => {
     const { settings, isFullyValid } = parseSettings(input);
     expect(isFullyValid).toBe(true);
     expect(settings.canvasAtmosphere).toBe(DEFAULT_SETTINGS.canvasAtmosphere);
+  });
+
+  it("treats missing terminalRenderer as fully valid and migrates it to auto", () => {
+    const input = {
+      ...DEFAULT_SETTINGS,
+      terminalRenderer: undefined,
+    };
+    const { settings, isFullyValid } = parseSettings(input);
+    expect(isFullyValid).toBe(true);
+    expect(settings.terminalRenderer).toBe("auto");
   });
 
   it("reports not fully valid when terminalFont is missing", () => {
@@ -290,6 +308,7 @@ describe("parseSettings", () => {
       terminalFont: "Source Code Pro",
       terminalFontSize: 18,
       terminalTheme: "dracula",
+      terminalRenderer: "auto",
       codeTheme: "monokai",
       canvasAtmosphere: "blueprint",
       zoomSpeed: 1.5,

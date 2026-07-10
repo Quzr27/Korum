@@ -49,6 +49,7 @@ interface Props {
   isActive: boolean;
   shouldHydrate: boolean;
   shouldAttach: boolean;
+  isStopped: boolean;
   terminalSnapshot?: string;
   zoomRef: React.RefObject<number>;
   snapTargetsRef: React.RefObject<readonly SnapTargetRect[]>;
@@ -66,6 +67,7 @@ interface Props {
   onPasteRequest: (request: PasteRequest) => void;
   onOpenFileLink: (workspaceId: string, originTerminalId: string, filePath: string, line: number, column?: number) => void;
   onActivateDemoTerminal: (id: string) => void;
+  onRestart: (id: string) => void;
   onLiveRectChange?: (id: string, rect: WindowMotionRect | null) => void;
 }
 
@@ -75,6 +77,7 @@ export default memo(function TerminalWindow({
   isActive,
   shouldHydrate,
   shouldAttach,
+  isStopped,
   terminalSnapshot,
   zoomRef,
   snapTargetsRef,
@@ -92,6 +95,7 @@ export default memo(function TerminalWindow({
   onPasteRequest,
   onOpenFileLink,
   onActivateDemoTerminal,
+  onRestart,
   onLiveRectChange,
 }: Props) {
   const { settings } = useSettings();
@@ -103,6 +107,10 @@ export default memo(function TerminalWindow({
   const termRef = useRef<HTMLDivElement>(null);
   const ptyIdRef = useRef<string | null>(null);
   const pendingDisposeRef = useRef<PendingDispose | null>(null);
+  const snapshotEpochRef = useRef(0);
+  const wasStoppedRef = useRef(isStopped);
+  if (isStopped && !wasStoppedRef.current) snapshotEpochRef.current += 1;
+  wasStoppedRef.current = isStopped;
   const mountedRef = useRef(false);
   const mountVersionRef = useRef(0);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -145,6 +153,14 @@ export default memo(function TerminalWindow({
   // On remount (workspace switch back): restores from win.ptyId — no re-spawn needed.
   // Cleanup does NOT kill PTY — App.tsx owns PTY destruction (removeWindow/deleteWorkspace).
   useEffect(() => {
+    if (isStopped) {
+      ptyIdRef.current = null;
+      mountedRef.current = false;
+      setSpawnError(null);
+      setIsPtyReady(false);
+      reportHydrationSettled();
+      return;
+    }
     if (isDemoTerminal) {
       ptyIdRef.current = null;
       mountedRef.current = false;
@@ -217,22 +233,20 @@ export default memo(function TerminalWindow({
       // PTY is NOT killed here — App.tsx kills it on removeWindow/deleteWorkspace.
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- respawnTrigger forces re-spawn on reopen; cwdRef/onPtySpawned stable via refs
-  }, [shouldHydrate, respawnTrigger, isDemoTerminal]);
+  }, [shouldHydrate, respawnTrigger, isDemoTerminal, isStopped]);
 
   const handleOpenFileLink = useCallback((filePath: string, line: number, column?: number) => {
     onOpenFileLink(win.workspaceId, id, filePath, line, column);
   }, [id, onOpenFileLink, win.workspaceId]);
 
   // ── Static preview for detached terminals ──
-  // At overview zooms most terminals stay detached (no xterm instance); the
-  // window shows either the DOM ghost left by the last detach, or this
-  // plain-text tail of the Rust replay buffer for never-attached terminals.
+  // At overview zooms most terminals stay detached (no xterm instance); show
+  // a bounded plain-text tail instead of retaining a deep clone of xterm DOM.
   const [previewText, setPreviewText] = useState<string | null>(null);
-  const [hasGhost, setHasGhost] = useState(false);
 
   useEffect(() => {
-    if (isDemoTerminal) return;
-    if (!isPtyReady || shouldAttach || hasGhost) return;
+    if (isDemoTerminal || isStopped) return;
+    if (!isPtyReady || shouldAttach) return;
     const ptyId = ptyIdRef.current;
     if (!ptyId) return;
     let cancelled = false;
@@ -255,22 +269,24 @@ export default memo(function TerminalWindow({
       cancelled = true;
       if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [isDemoTerminal, isPtyReady, shouldAttach, hasGhost]);
+  }, [isDemoTerminal, isPtyReady, isStopped, shouldAttach]);
 
   // ── xterm session (Effect B + settings/focus/resize effects) ──
   const { termInstanceRef, isSessionReady } = useXtermSession({
     id,
-    isPtyReady,
-    shouldAttach: isDemoTerminal ? false : shouldAttach,
+    isPtyReady: isPtyReady && !isStopped,
+    shouldAttach: isDemoTerminal || isStopped ? false : shouldAttach,
     terminalSnapshot,
     terminalFont: settings.terminalFont,
     terminalFontSize: settings.terminalFontSize,
     terminalTheme: settings.terminalTheme,
+    terminalRenderer: settings.terminalRenderer,
     zoomRef,
     ptyIdRef,
     mountedRef,
     termRef,
     pendingDisposeRef,
+    snapshotEpochRef,
     windowWidth: win.width,
     windowHeight: win.height,
     isActive,
@@ -280,7 +296,6 @@ export default memo(function TerminalWindow({
     workspaceRoot,
     onOpenFileLink: handleOpenFileLink,
     onSpawnError: setSpawnError,
-    onGhosted: setHasGhost,
   });
 
   // Reopen after error — kill old PTY, trigger respawn via Effect A
@@ -314,6 +329,9 @@ export default memo(function TerminalWindow({
   const handleActivateDemoTerminal = useCallback(() => {
     onActivateDemoTerminal(id);
   }, [id, onActivateDemoTerminal]);
+  const handleRestart = useCallback(() => {
+    onRestart(id);
+  }, [id, onRestart]);
 
   const terminalTheme = getXtermTheme(settings.terminalTheme);
   const chrome = useMemo(() => getChromeShades(terminalTheme.background), [terminalTheme.background]);
@@ -322,7 +340,7 @@ export default memo(function TerminalWindow({
     isSessionReady,
     spawnError,
     isPtyReady,
-    hasGhost,
+    hasGhost: false,
     previewText,
   });
   const pendingMessage = shouldHydrate
@@ -426,12 +444,20 @@ export default memo(function TerminalWindow({
                 {previewText}
               </pre>
             )}
-            {displayState.showPendingOverlay && (
+            {!isStopped && displayState.showPendingOverlay && (
               <div className="terminal-pending-overlay">
                 <p className="terminal-error-text">{pendingMessage}</p>
               </div>
             )}
-            {spawnError && (
+            {isStopped && (
+              <div className="terminal-error-overlay">
+                <p className="terminal-error-text">Session stopped</p>
+                <button type="button" className="terminal-reopen-btn" onClick={handleRestart}>
+                  Restart
+                </button>
+              </div>
+            )}
+            {!isStopped && spawnError && (
               <div className="terminal-error-overlay">
                 <p className="terminal-error-text">Session could not be restored</p>
                 <button type="button" className="terminal-reopen-btn" onClick={handleReopen}>

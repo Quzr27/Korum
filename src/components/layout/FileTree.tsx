@@ -47,6 +47,8 @@ interface TreeRow {
   depth: number;
 }
 
+const WATCHER_REFRESH_DEBOUNCE_MS = 100;
+
 // ── Props ──
 
 interface FileTreeProps {
@@ -87,6 +89,7 @@ export default function FileTree({
   const [watcherError, setWatcherError] = useState(false);
   const mountedRef = useRef(true);
   const expandedPathsRef = useRef(expandedPaths);
+  const requestCoalescedRefreshRef = useRef<() => void>(() => {});
   const activeRowRef = useRef<HTMLButtonElement | null>(null);
   const validationMessageId = useId();
   expandedPathsRef.current = expandedPaths;
@@ -133,10 +136,57 @@ export default function FileTree({
 
   useEffect(() => {
     let alive = true;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let refreshInFlight = false;
+    let refreshQueued = false;
+    let watcherStarted = false;
+    let watcherReleased = false;
     mountedRef.current = true;
-    fetchDirectory(rootPath);
-    fetchGitStatus();
-    invoke("start_watching", { rootPath }).catch(() => {
+
+    function scheduleRefresh() {
+      if (!alive) return;
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+      }
+      if (refreshTimer !== null) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        void runRefresh();
+      }, WATCHER_REFRESH_DEBOUNCE_MS);
+    }
+    requestCoalescedRefreshRef.current = scheduleRefresh;
+
+    async function runRefresh() {
+      if (!alive) return;
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+      }
+
+      refreshInFlight = true;
+      refreshQueued = false;
+      try {
+        const directoryRefreshes = [...expandedPathsRef.current].map((dir) => fetchDirectory(dir));
+        await Promise.all([...directoryRefreshes, fetchGitStatus()]);
+      } finally {
+        refreshInFlight = false;
+        if (alive && refreshQueued) scheduleRefresh();
+      }
+    }
+
+    void runRefresh();
+    const releaseWatcher = () => {
+      if (!watcherStarted || watcherReleased) return;
+      watcherReleased = true;
+      void invoke("stop_watching", { rootPath }).catch(() => {});
+    };
+    void invoke("start_watching", { rootPath }).then(() => {
+      watcherStarted = true;
+      // start_watching resolves only after its ref-count entry is committed.
+      // If unmount won the race, release this exact start once now.
+      if (!alive) releaseWatcher();
+    }).catch(() => {
       if (alive) setWatcherError(true);
     });
 
@@ -146,11 +196,7 @@ export default function FileTree({
     listen<string>("file-tree-changed", (event) => {
       if (!alive) return;
       if (event.payload === rootPath) {
-        // Re-fetch expanded dirs from ref (no side-effect in state updater)
-        for (const dir of expandedPathsRef.current) {
-          fetchDirectory(dir);
-        }
-        fetchGitStatus();
+        scheduleRefresh();
       }
     }).then((fn) => {
       if (alive) {
@@ -164,8 +210,10 @@ export default function FileTree({
     return () => {
       alive = false;
       mountedRef.current = false;
+      requestCoalescedRefreshRef.current = () => {};
+      if (refreshTimer !== null) clearTimeout(refreshTimer);
       unlistenFn?.();
-      invoke("stop_watching", { rootPath }).catch(() => {});
+      releaseWatcher();
     };
   }, [rootPath, fetchDirectory, fetchGitStatus]);
 
@@ -176,11 +224,8 @@ export default function FileTree({
     // Skip the initial mount — the mount effect already fetches
     if (showIgnoredInitRef.current === showIgnored) return;
     showIgnoredInitRef.current = showIgnored;
-    fetchDirectory(rootPath);
-    for (const dir of expandedPathsRef.current) {
-      fetchDirectory(dir);
-    }
-  }, [showIgnored, rootPath, fetchDirectory]);
+    requestCoalescedRefreshRef.current();
+  }, [showIgnored]);
 
   useEffect(() => {
     if (!activeFilePath) return;

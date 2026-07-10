@@ -42,6 +42,7 @@ interface CanvasProps {
   activeWindowId: string | null;
   hydratedTerminalIds: ReadonlySet<string>;
   bootingTerminalIds: ReadonlySet<string>;
+  stoppedTerminalIds: ReadonlySet<string>;
   pan: Point2D;
   zoom: number;
   onPanChange: (pan: Point2D) => void;
@@ -64,6 +65,7 @@ interface CanvasProps {
   onOpenTerminalFileLink: (workspaceId: string, originTerminalId: string, filePath: string, line: number, column?: number) => void;
   onViewModeChange: (id: string, mode: CodeViewMode) => void;
   onActivateDemoTerminal: (id: string) => void;
+  onRestartTerminal: (id: string) => void;
 }
 
 export default memo(function Canvas({
@@ -73,6 +75,7 @@ export default memo(function Canvas({
   activeWindowId,
   hydratedTerminalIds,
   bootingTerminalIds,
+  stoppedTerminalIds,
   pan,
   zoom,
   onPanChange,
@@ -95,6 +98,7 @@ export default memo(function Canvas({
   onOpenTerminalFileLink,
   onViewModeChange,
   onActivateDemoTerminal,
+  onRestartTerminal,
 }: CanvasProps) {
   const { settings } = useSettings();
   const [isPanning, setIsPanning] = useState(false);
@@ -276,6 +280,7 @@ export default memo(function Canvas({
     viewportHeight,
     keepAliveUntil: liveTerminalKeepAliveRef.current,
     now: selectionNow,
+    excludedTerminalIds: stoppedTerminalIds,
   });
   liveTerminalKeepAliveRef.current = liveSelection.keepAliveUntil;
   const nextKeepAliveExpiry = Object.values(liveSelection.keepAliveUntil).reduce<number>(
@@ -570,6 +575,7 @@ export default memo(function Canvas({
                   isActive={activeWindowId === w.id}
                   shouldHydrate={shouldHydrate}
                   shouldAttach={shouldAttach}
+                  isStopped={stoppedTerminalIds.has(w.id)}
                   terminalSnapshot={terminalSnapshots[w.id]}
                   zoomRef={zoomRef}
                   snapTargetsRef={snapTargetsRef}
@@ -587,6 +593,7 @@ export default memo(function Canvas({
                   onPasteRequest={onPasteRequest}
                   onOpenFileLink={onOpenTerminalFileLink}
                   onActivateDemoTerminal={onActivateDemoTerminal}
+                  onRestart={onRestartTerminal}
                   onLiveRectChange={handleLiveRectChange}
                 />
               );

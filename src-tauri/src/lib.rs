@@ -11,12 +11,12 @@ mod storage;
 
 use agent_status::AgentStatusState;
 use commands::{
-    attach_terminal, confirm_app_exit, create_directory, create_file, create_terminal, delete_path,
-    detach_terminal, fetch_claude_usage, fetch_codex_usage, get_agent_statuses, get_file_diff,
-    get_git_file_status, get_git_status, get_terminal_preview, get_worktree_info, kill_terminal,
-    load_layout_package, load_settings, load_state, open_external_url, pause_terminal_read,
-    read_code_file_content, read_directory, read_file_content, register_agent_terminal,
-    rename_path, resize_terminal, resume_terminal_read, reveal_snapshot_path,
+    ack_terminal_output, attach_terminal, confirm_app_exit, create_directory, create_file,
+    create_terminal, delete_path, detach_terminal, fetch_claude_usage, fetch_codex_usage,
+    get_agent_statuses, get_file_diff, get_git_file_status, get_git_status, get_terminal_preview,
+    get_worktree_info, kill_terminal, load_layout_package, load_settings, load_state,
+    open_external_url, read_code_file_content, read_directory, read_file_content,
+    register_agent_terminal, rename_path, resize_terminal, reveal_snapshot_path,
     save_layout_package, save_settings, save_snapshot_png, save_state, search_workspace_files,
     start_watching, stop_watching, unregister_agent_terminal, write_terminal,
 };
@@ -158,8 +158,7 @@ pub fn run() {
             create_terminal,
             attach_terminal,
             detach_terminal,
-            pause_terminal_read,
-            resume_terminal_read,
+            ack_terminal_output,
             write_terminal,
             resize_terminal,
             kill_terminal,
@@ -211,4 +210,30 @@ pub fn run() {
             let _ = app.emit(QUIT_REQUESTED_EVENT, ());
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn csp_allows_tauri_ipc_channel_fetches() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid tauri config");
+        let csp = config["app"]["security"]["csp"]
+            .as_str()
+            .expect("string CSP");
+
+        let connect_sources: Vec<&str> = csp
+            .split(';')
+            .find_map(|directive| {
+                let mut tokens = directive.split_whitespace();
+                (tokens.next() == Some("connect-src")).then(|| tokens.collect())
+            })
+            .expect("connect-src CSP directive");
+
+        assert_eq!(
+            connect_sources,
+            ["ipc:", "http://ipc.localhost"],
+            "allow only Tauri's internal IPC fetch transport"
+        );
+    }
 }

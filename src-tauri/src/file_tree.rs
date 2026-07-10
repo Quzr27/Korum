@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Mutex;
+use std::time::Duration;
 
-use notify_debouncer_mini::notify::RecommendedWatcher;
-use notify_debouncer_mini::{new_debouncer, DebouncedEventKind, Debouncer};
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -67,7 +68,7 @@ pub struct WorkspaceFileSearchEntry {
 
 struct WatcherEntry {
     #[allow(dead_code)] // kept alive — dropped when removed from HashMap
-    debouncer: Debouncer<RecommendedWatcher>,
+    watcher: RecommendedWatcher,
     ref_count: u32,
 }
 
@@ -86,6 +87,15 @@ impl FileWatcherState {
 // ── Path confinement ──
 
 const ALWAYS_EXCLUDE: &[&str] = &[".git", ".DS_Store", "Thumbs.db"];
+const WATCHER_EXCLUDE_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    "coverage",
+];
 
 /// Canonicalize `path` and verify it lives under `root`. Prevents path traversal.
 /// Falls back to lexical prefix check for dangling symlinks (canonicalize fails on NotFound).
@@ -892,6 +902,19 @@ pub fn delete_path(path: &str, root: &str) -> Result<(), String> {
 
 // ── File watching (ref-counted) ──
 
+fn should_emit_watcher_event(root: &Path, event_path: &Path) -> bool {
+    let Ok(relative_path) = event_path.strip_prefix(root) else {
+        return true;
+    };
+
+    !relative_path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|name| WATCHER_EXCLUDE_DIRS.contains(&name))
+    })
+}
+
 pub fn start_watching(
     root_path: &str,
     app: &AppHandle,
@@ -914,29 +937,44 @@ pub fn start_watching(
     // a concurrent `stop_watching` would deadlock.
     let root = root_path.to_string();
     let app_handle = app.clone();
-
-    let mut debouncer = new_debouncer(
-        std::time::Duration::from_millis(300),
-        move |events: Result<
-            Vec<notify_debouncer_mini::DebouncedEvent>,
-            notify_debouncer_mini::notify::Error,
-        >| {
-            if let Ok(events) = events {
-                let has_changes = events.iter().any(|e| e.kind == DebouncedEventKind::Any);
-                if has_changes {
+    let callback_root = root.clone();
+    // Filter generated/dependency paths before they enter any debounce queue.
+    // The bounded channel stores at most one dirty signal regardless of build
+    // churn; a worker turns it into one trailing event after 100 ms of quiet.
+    let (change_tx, change_rx) = mpsc::sync_channel::<()>(1);
+    std::thread::spawn(move || loop {
+        if change_rx.recv().is_err() {
+            return;
+        }
+        loop {
+            match change_rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(()) => continue,
+                Err(RecvTimeoutError::Timeout) => {
                     let _ = app_handle.emit("file-tree-changed", &root);
+                    break;
                 }
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    });
+
+    let mut watcher = RecommendedWatcher::new(
+        move |event: Result<notify::Event, notify::Error>| {
+            if event.is_ok_and(|event| {
+                event
+                    .paths
+                    .iter()
+                    .any(|path| should_emit_watcher_event(Path::new(&callback_root), path))
+            }) {
+                let _ = change_tx.try_send(());
             }
         },
+        Config::default(),
     )
     .map_err(|e| format!("Failed to create watcher: {e}"))?;
 
-    debouncer
-        .watcher()
-        .watch(
-            Path::new(root_path),
-            notify_debouncer_mini::notify::RecursiveMode::Recursive,
-        )
+    watcher
+        .watch(Path::new(root_path), RecursiveMode::Recursive)
         .map_err(|e| format!("Failed to start watching: {e}"))?;
 
     // Insert into the map now that the watcher is running.
@@ -946,14 +984,14 @@ pub fn start_watching(
         .map_err(|e: std::sync::PoisonError<_>| e.to_string())?;
 
     // Another thread may have inserted while we were setting up — check again.
-    // If so, the debouncer we just created will be dropped (and unwatch itself).
+    // If so, the watcher we just created will be dropped (and unwatch itself).
     if let Some(entry) = watchers.get_mut(root_path) {
         entry.ref_count += 1;
     } else {
         watchers.insert(
             root_path.to_string(),
             WatcherEntry {
-                debouncer,
+                watcher,
                 ref_count: 1,
             },
         );
@@ -993,6 +1031,41 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("korum_test_{}_{}", prefix, nanos));
         fs::create_dir_all(&dir).expect("failed to create temp dir");
         dir
+    }
+
+    #[test]
+    fn watcher_events_ignore_generated_and_dependency_trees() {
+        let root = Path::new("/workspace/project");
+        for relative_path in [
+            ".git/index",
+            "node_modules/pkg/index.js",
+            "src-tauri/target/debug/korum",
+            "dist/assets/index.js",
+            "build/output.js",
+            "apps/web/.next/cache/data",
+            "coverage/lcov.info",
+        ] {
+            assert!(
+                !should_emit_watcher_event(root, &root.join(relative_path)),
+                "expected watcher event under {relative_path} to be ignored"
+            );
+        }
+    }
+
+    #[test]
+    fn watcher_events_keep_source_and_similarly_named_paths() {
+        let root = Path::new("/workspace/project");
+        for relative_path in [
+            "src/App.tsx",
+            "src/targeted.rs",
+            "builder/output.ts",
+            ".gitignore",
+        ] {
+            assert!(
+                should_emit_watcher_event(root, &root.join(relative_path)),
+                "expected watcher event for {relative_path} to be emitted"
+            );
+        }
     }
 
     // ── confine_path ──────────────────────────────────────────────────────────

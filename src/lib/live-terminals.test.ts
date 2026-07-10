@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectLiveTerminalIds } from "./live-terminals";
+import { getLiveTerminalCost, selectLiveTerminalIds } from "./live-terminals";
 import type { WindowState } from "@/types";
 
 function makeTerminal(
@@ -25,6 +25,25 @@ function makeTerminal(
 }
 
 describe("selectLiveTerminalIds", () => {
+  it("does not charge stopped terminals against the live budget", () => {
+    const stopped = Array.from({ length: 8 }, (_, index) => makeTerminal(`stopped-${index}`, index * 20, 0, index));
+    const running = makeTerminal("running", 200, 0, 20);
+    const result = selectLiveTerminalIds({
+      windows: [...stopped, running],
+      activeWorkspaceId: "ws-a",
+      activeWindowId: null,
+      pan: { x: 0, y: 0 },
+      zoom: 0.45,
+      viewportWidth: 1200,
+      viewportHeight: 800,
+      keepAliveUntil: {},
+      now: 1_000,
+      excludedTerminalIds: new Set(stopped.map((win) => win.id)),
+    });
+
+    expect(result.liveTerminalIds).toEqual(new Set([running.id]));
+  });
+
   it("keeps the active terminal live even when it is off-screen", () => {
     const windows = [
       makeTerminal("active", 4000, 0, 9),
@@ -88,7 +107,7 @@ describe("selectLiveTerminalIds", () => {
     expect(result.liveTerminalIds.has("term-17")).toBe(true); // active always wins
   });
 
-  it("keeps small terminal counts fully live regardless of zoom", () => {
+  it("applies the zoom budget even to small terminal counts", () => {
     const windows = Array.from({ length: 6 }, (_, index) =>
       makeTerminal(`term-${index}`, index * 300, 0, index),
     );
@@ -105,7 +124,48 @@ describe("selectLiveTerminalIds", () => {
       now: 2_000,
     });
 
-    expect(result.liveTerminalIds.size).toBe(6);
+    expect(result.liveTerminalIds.size).toBe(2);
+  });
+
+  it("charges large terminal windows proportionally against the budget", () => {
+    const windows = Array.from({ length: 12 }, (_, index) => ({
+      ...makeTerminal(`term-${index}`, 200, 100, 12 - index),
+      width: index < 2 ? 1120 : 560,
+      height: 348,
+    }));
+
+    const result = selectLiveTerminalIds({
+      windows,
+      activeWorkspaceId: "ws-a",
+      activeWindowId: null,
+      pan: { x: 0, y: 0 },
+      zoom: 0.7,
+      viewportWidth: 1_600,
+      viewportHeight: 1_200,
+      keepAliveUntil: {},
+      now: 2_000,
+    });
+
+    expect(result.liveTerminalIds.size).toBe(10);
+  });
+
+  it("always keeps an oversized active terminal live", () => {
+    const active = { ...makeTerminal("active", 0, 0, 99), width: 2_240, height: 696 };
+    const neighbor = makeTerminal("neighbor", 600, 0, 1);
+
+    const result = selectLiveTerminalIds({
+      windows: [active, neighbor],
+      activeWorkspaceId: "ws-a",
+      activeWindowId: "active",
+      pan: { x: 0, y: 0 },
+      zoom: 0.3,
+      viewportWidth: 1_600,
+      viewportHeight: 900,
+      keepAliveUntil: {},
+      now: 2_000,
+    });
+
+    expect(result.liveTerminalIds).toEqual(new Set(["active"]));
   });
 
   it("keeps recently visible terminals alive briefly after leaving the viewport", () => {
@@ -144,5 +204,17 @@ describe("selectLiveTerminalIds", () => {
 
     expect(result.liveTerminalIds.size).toBe(0);
     expect(result.keepAliveUntil["term-1"]).toBeUndefined();
+  });
+});
+
+describe("getLiveTerminalCost", () => {
+  it("uses one unit for the baseline and smaller terminals", () => {
+    expect(getLiveTerminalCost(560, 348)).toBe(1);
+    expect(getLiveTerminalCost(280, 174)).toBe(1);
+  });
+
+  it("scales proportionally for larger areas", () => {
+    expect(getLiveTerminalCost(1120, 348)).toBe(2);
+    expect(getLiveTerminalCost(1120, 696)).toBe(4);
   });
 });

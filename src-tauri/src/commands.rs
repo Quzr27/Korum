@@ -6,7 +6,9 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::process::Command;
 use tauri::ipc::{Channel, Response};
-use tauri::State;
+use tauri::{Emitter, State};
+
+const TERMINAL_EXITED_EVENT: &str = "terminal-exited";
 
 #[derive(Serialize)]
 pub struct TerminalInfo {
@@ -15,11 +17,14 @@ pub struct TerminalInfo {
 
 #[tauri::command]
 pub fn create_terminal(
+    app: tauri::AppHandle,
     state: State<'_, PtyState>,
     cwd: Option<String>,
 ) -> Result<TerminalInfo, String> {
     let shell = get_default_shell();
-    let id = state.spawn(&shell, cwd.as_deref(), 24, 80)?;
+    let id = state.spawn(&shell, cwd.as_deref(), 24, 80, move |payload| {
+        let _ = app.emit(TERMINAL_EXITED_EVENT, payload);
+    })?;
     Ok(TerminalInfo { id })
 }
 
@@ -27,27 +32,30 @@ pub fn create_terminal(
 pub fn attach_terminal(
     state: State<'_, PtyState>,
     id: String,
-    // Raw byte body (ArrayBuffer on the JS side) — see TerminalStream.channel.
+    attachment_id: String,
+    // Raw byte body (ArrayBuffer on the JS side) — see TerminalAttachment.
     output_channel: Channel<Response>,
 ) -> Result<(), String> {
-    state.attach(&id, output_channel)
+    state.attach(&id, attachment_id, output_channel)
 }
 
 #[tauri::command]
-pub fn detach_terminal(state: State<'_, PtyState>, id: String) -> Result<(), String> {
-    state.detach(&id)
-}
-
-/// Flow control: frontend pauses the PTY read thread when its xterm parse
-/// buffer is backed up, and resumes once drained (see useXtermSession).
-#[tauri::command]
-pub fn pause_terminal_read(state: State<'_, PtyState>, id: String) -> Result<(), String> {
-    state.pause_read(&id)
+pub fn detach_terminal(
+    state: State<'_, PtyState>,
+    id: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    state.detach(&id, &attachment_id)
 }
 
 #[tauri::command]
-pub fn resume_terminal_read(state: State<'_, PtyState>, id: String) -> Result<(), String> {
-    state.resume_read(&id)
+pub fn ack_terminal_output(
+    state: State<'_, PtyState>,
+    id: String,
+    attachment_id: String,
+    bytes: usize,
+) -> Result<(), String> {
+    state.acknowledge(&id, &attachment_id, bytes)
 }
 
 #[tauri::command]
@@ -281,8 +289,12 @@ pub async fn search_workspace_files(
 }
 
 #[tauri::command]
-pub fn get_git_status(root_path: String) -> Result<crate::file_tree::GitStatusResult, String> {
-    crate::file_tree::get_git_status(&root_path)
+pub async fn get_git_status(
+    root_path: String,
+) -> Result<crate::file_tree::GitStatusResult, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::file_tree::get_git_status(&root_path))
+        .await
+        .map_err(|e| format!("get_git_status task failed: {e}"))?
 }
 
 #[tauri::command]

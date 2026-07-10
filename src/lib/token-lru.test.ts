@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { createTokenLRU } from "./token-lru";
+import { createTokenLRU, estimateTokenCacheBytes } from "./token-lru";
+
+describe("estimateTokenCacheBytes", () => {
+  it("accounts for the source key, nested arrays, token objects, and token strings", () => {
+    const source = "const answer = 42";
+    const sparse = [[{ content: source }]];
+    const dense = [[
+      { content: "const", color: "#ff0000" },
+      { content: " answer", color: "#00ff00" },
+      { content: " = 42", color: "#0000ff" },
+    ]];
+
+    expect(estimateTokenCacheBytes(source, sparse)).toBeGreaterThan(source.length * 2);
+    expect(estimateTokenCacheBytes(source, dense)).toBeGreaterThan(
+      estimateTokenCacheBytes(source, sparse),
+    );
+  });
+
+  it("charges each line array even when a line has no tokens", () => {
+    const oneLine = estimateTokenCacheBytes("", [[]]);
+    const threeLines = estimateTokenCacheBytes("", [[], [], []]);
+
+    expect(threeLines).toBeGreaterThan(oneLine);
+  });
+});
 
 describe("createTokenLRU", () => {
   it("returns undefined for a missing key and stores values", () => {

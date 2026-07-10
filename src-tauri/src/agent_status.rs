@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter};
 pub const AGENT_STATUS_CHANGED_EVENT: &str = "korum://agent-status-changed";
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
-const CLAUDE_POLL_INTERVAL_MS: u64 = 2_000;
+const CLAUDE_SUCCESS_CACHE_MS: u64 = 10_000;
 const CLAUDE_ERROR_BACKOFF_MS: u64 = 10_000;
 const RECENT_SCROLLBACK_LINES: usize = 80;
 const WAITING_TAIL_LINES: usize = 12;
@@ -724,7 +724,7 @@ impl ClaudeAgentsCache {
                 // Successful fetch: update records (may be empty if no agents
                 // are running — that's a real "nothing active" signal).
                 self.records = records;
-                self.next_fetch_at_ms = now.saturating_add(CLAUDE_POLL_INTERVAL_MS);
+                self.next_fetch_at_ms = now.saturating_add(CLAUDE_SUCCESS_CACHE_MS);
             }
             Err(_) => {
                 // On error, RETAIN previous records to avoid status flicker.
@@ -1344,6 +1344,11 @@ fn scan_latest_modified(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_agents_success_cache_is_ten_seconds() {
+        assert_eq!(CLAUDE_SUCCESS_CACHE_MS, 10_000);
+    }
 
     #[test]
     fn kind_from_process_command_maps_known_agent_binaries() {

@@ -1,5 +1,5 @@
 import { createHighlighter, type BundledLanguage, type BundledTheme, type Highlighter, type ThemedToken } from "shiki";
-import { createTokenLRU } from "./token-lru";
+import { createTokenLRU, estimateTokenCacheBytes } from "./token-lru";
 
 type TokenizeWorkerResponse =
   | { id: number; ok: true; tokens: ThemedToken[][] }
@@ -125,8 +125,11 @@ async function ensureTheme(hl: Highlighter, theme: string): Promise<boolean> {
 // Token cache: code windows re-tokenize on every viewport re-entry and on
 // watcher-driven re-reads even when content is unchanged. Tokens are immutable
 // once produced, so cached arrays are shared safely across consumers. Budget
-// is in bytes of source content (~6MB ≈ a dozen large files).
-const TOKEN_CACHE_MAX_BYTES = 6_000_000;
+// is an estimated retained JS heap weight, including nested arrays, token
+// objects, token strings, and the source-based cache key. This is deliberately
+// larger than the old source-byte budget while bounding the actual heap much
+// more tightly for token-dense files.
+const TOKEN_CACHE_MAX_BYTES = 48 * 1024 * 1024;
 const tokenCache = createTokenLRU<ThemedToken[][]>(TOKEN_CACHE_MAX_BYTES);
 const inflightTokenizations = new Map<string, Promise<ThemedToken[][]>>();
 
@@ -182,7 +185,7 @@ export function tokenizeCode(
   if (!pending) {
     pending = tokenizeUncached(code, lang, theme)
       .then((tokens) => {
-        tokenCache.set(key, tokens, code.length);
+        tokenCache.set(key, tokens, estimateTokenCacheBytes(key, tokens));
         return tokens;
       })
       .finally(() => inflightTokenizations.delete(key));
