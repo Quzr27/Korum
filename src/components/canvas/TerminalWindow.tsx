@@ -280,7 +280,6 @@ export default memo(function TerminalWindow({
     terminalFont: settings.terminalFont,
     terminalFontSize: settings.terminalFontSize,
     terminalTheme: settings.terminalTheme,
-    terminalRenderer: settings.terminalRenderer,
     zoomRef,
     ptyIdRef,
     mountedRef,

@@ -4,7 +4,6 @@ export type ThemeMode = "light" | "dark";
 export type BaseColor = "neutral" | "zinc" | "stone" | "mauve" | "olive";
 export type TerminalFont = "JetBrains Mono" | "IBM Plex Mono" | "Source Code Pro";
 export type TerminalTheme = "arcadia-midnight" | "tomorrow-night" | "tomorrow-night-eighties" | "oceanic-next" | "one-dark" | "gruvbox-soft" | "gruvbox-medium" | "harmonic-dark" | "materia" | "monokai" | "ocean" | "seti" | "solarized-dark" | "spacemacs" | "atelier-forest" | "afterglow" | "argonaut" | "cobalt2" | "dimmed-monokai" | "dracula" | "duotone-dark" | "spacegray-eighties" | "papercolor-light" | "tomorrow-light" | "one-half-light";
-export type TerminalRenderer = "auto" | "dom";
 export type CanvasAtmosphere = "workbench" | "blueprint" | "draft" | "signal";
 export type CodeTheme = "github-dark" | "github-light" | "dracula" | "one-dark-pro" | "nord" | "catppuccin-mocha" | "catppuccin-latte" | "solarized-dark" | "tokyo-night" | "rose-pine" | "monokai" | "vitesse-dark" | "ayu-dark" | "min-dark" | "andromeeda" | "dark-plus";
 export type RadiusPreset = 0 | 0.625;
@@ -17,7 +16,6 @@ export interface Settings {
   terminalFont: TerminalFont;
   terminalFontSize: number;
   terminalTheme: TerminalTheme;
-  terminalRenderer: TerminalRenderer;
   codeTheme: CodeTheme;
   canvasAtmosphere: CanvasAtmosphere;
   zoomSpeed: ZoomSpeed;
@@ -31,7 +29,6 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalFont: "IBM Plex Mono",
   terminalFontSize: 14,
   terminalTheme: "tomorrow-night",
-  terminalRenderer: "auto",
   codeTheme: "github-dark",
   canvasAtmosphere: "workbench",
   zoomSpeed: 1,

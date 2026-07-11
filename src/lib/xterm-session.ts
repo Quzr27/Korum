@@ -26,7 +26,7 @@ import {
   TERMINAL_NERD_FONT_SAMPLE,
   getXtermTheme,
 } from "@/lib/settings";
-import type { TerminalFont, TerminalRenderer, TerminalTheme } from "@/lib/settings/types";
+import type { TerminalFont, TerminalTheme } from "@/lib/settings/types";
 import {
   findTerminalDiagnosticLink,
   findTerminalFileContext,
@@ -42,7 +42,6 @@ import {
 } from "@/lib/terminal-glyph-normalizer";
 import { handleTerminalShortcut } from "@/lib/terminal-shortcuts";
 import {
-  activateTerminalRenderer,
   createTerminalDisplayRepairScheduler,
   refreshTerminalDisplay,
 } from "@/lib/xterm-render-repair";
@@ -332,7 +331,6 @@ export interface UseXtermSessionOptions {
   terminalFont: TerminalFont;
   terminalFontSize: number;
   terminalTheme: TerminalTheme;
-  terminalRenderer: TerminalRenderer;
   zoomRef: React.RefObject<number>;
   ptyIdRef: React.MutableRefObject<string | null>;
   mountedRef: React.MutableRefObject<boolean>;
@@ -366,7 +364,6 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     terminalFont,
     terminalFontSize,
     terminalTheme,
-    terminalRenderer,
     zoomRef,
     ptyIdRef,
     mountedRef,
@@ -452,7 +449,6 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
 
     // Open terminal synchronously (container is in DOM from React commit)
     term.open(termRef.current!);
-    activateTerminalRenderer(term, terminalRenderer);
 
     const linkProviderDisposable = term.registerLinkProvider({
       provideLinks: (bufferLineNumber, callback) => {
@@ -702,7 +698,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
       pendingDisposeRef.current = { term, timer, capture: captureSnapshot };
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- settings handled by separate effect; terminalSnapshot captured at mount via snapshotAtMount; link callbacks use refs to avoid remounting xterm; onPasteRequest/onSpawnError omitted — both are stable (useCallback with [] deps / useState setter)
-  }, [flushPendingDispose, id, isPtyReady, onSnapshotCaptured, shouldAttach, terminalRenderer]);
+  }, [flushPendingDispose, id, isPtyReady, onSnapshotCaptured, shouldAttach]);
 
   // Update terminal options when settings change
   useEffect(() => {
