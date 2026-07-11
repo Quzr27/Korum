@@ -5,7 +5,6 @@ export type {
   BaseColor,
   TerminalFont,
   TerminalTheme,
-  TerminalRenderer,
   CanvasAtmosphere,
   RadiusPreset,
   ZoomSpeed,

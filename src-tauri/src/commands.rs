@@ -59,8 +59,12 @@ pub fn ack_terminal_output(
 }
 
 #[tauri::command]
-pub fn write_terminal(state: State<'_, PtyState>, id: String, data: String) -> Result<(), String> {
-    state.write(&id, data.as_bytes())
+pub fn write_terminal(
+    state: State<'_, PtyState>,
+    id: String,
+    data: String,
+) -> Result<bool, String> {
+    state.write(&id, data.into_bytes())
 }
 
 #[tauri::command]

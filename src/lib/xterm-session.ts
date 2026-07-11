@@ -26,7 +26,7 @@ import {
   TERMINAL_NERD_FONT_SAMPLE,
   getXtermTheme,
 } from "@/lib/settings";
-import type { TerminalFont, TerminalRenderer, TerminalTheme } from "@/lib/settings/types";
+import type { TerminalFont, TerminalTheme } from "@/lib/settings/types";
 import {
   findTerminalDiagnosticLink,
   findTerminalFileContext,
@@ -41,8 +41,8 @@ import {
   normalizeTerminalStatusGlyphs,
 } from "@/lib/terminal-glyph-normalizer";
 import { handleTerminalShortcut } from "@/lib/terminal-shortcuts";
+import { writeTerminalInput } from "@/lib/terminal-input";
 import {
-  activateTerminalRenderer,
   createTerminalDisplayRepairScheduler,
   refreshTerminalDisplay,
 } from "@/lib/xterm-render-repair";
@@ -332,7 +332,6 @@ export interface UseXtermSessionOptions {
   terminalFont: TerminalFont;
   terminalFontSize: number;
   terminalTheme: TerminalTheme;
-  terminalRenderer: TerminalRenderer;
   zoomRef: React.RefObject<number>;
   ptyIdRef: React.MutableRefObject<string | null>;
   mountedRef: React.MutableRefObject<boolean>;
@@ -366,7 +365,6 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     terminalFont,
     terminalFontSize,
     terminalTheme,
-    terminalRenderer,
     zoomRef,
     ptyIdRef,
     mountedRef,
@@ -452,7 +450,6 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
 
     // Open terminal synchronously (container is in DOM from React commit)
     term.open(termRef.current!);
-    activateTerminalRenderer(term, terminalRenderer);
 
     const linkProviderDisposable = term.registerLinkProvider({
       provideLinks: (bufferLineNumber, callback) => {
@@ -563,7 +560,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     };
     const onDataDisposable = term.onData((data: string) => {
       if (ptyIdRef.current) {
-        invoke("write_terminal", { id: ptyIdRef.current, data }).catch(() => {
+        writeTerminalInput(ptyIdRef.current, data).catch(() => {
           if (alive) onSpawnError("Terminal process is not responding");
         });
       }
@@ -626,10 +623,18 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
         },
         clearTerminal: () => {
           term.clear();
-          if (ptyIdRef.current) invoke("write_terminal", { id: ptyIdRef.current, data: "\x0c" });
+          if (ptyIdRef.current) {
+            void writeTerminalInput(ptyIdRef.current, "\x0c").catch(() => {
+              if (alive) onSpawnError("Terminal process is not responding");
+            });
+          }
         },
         sendLineFeed: () => {
-          if (ptyIdRef.current) invoke("write_terminal", { id: ptyIdRef.current, data: "\n" });
+          if (ptyIdRef.current) {
+            void writeTerminalInput(ptyIdRef.current, "\n").catch(() => {
+              if (alive) onSpawnError("Terminal process is not responding");
+            });
+          }
         },
       });
     });
@@ -702,7 +707,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
       pendingDisposeRef.current = { term, timer, capture: captureSnapshot };
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- settings handled by separate effect; terminalSnapshot captured at mount via snapshotAtMount; link callbacks use refs to avoid remounting xterm; onPasteRequest/onSpawnError omitted — both are stable (useCallback with [] deps / useState setter)
-  }, [flushPendingDispose, id, isPtyReady, onSnapshotCaptured, shouldAttach, terminalRenderer]);
+  }, [flushPendingDispose, id, isPtyReady, onSnapshotCaptured, shouldAttach]);
 
   // Update terminal options when settings change
   useEffect(() => {

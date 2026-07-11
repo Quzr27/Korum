@@ -15,7 +15,6 @@ vi.mock("@/lib/settings-context", () => ({
       terminalFont: "IBM Plex Mono",
       terminalFontSize: 14,
       terminalTheme: "tomorrow-night",
-      terminalRenderer: "auto",
       terminalScrollSpeed: 2,
     },
   }),
