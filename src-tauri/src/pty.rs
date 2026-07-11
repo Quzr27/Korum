@@ -21,6 +21,11 @@ const READ_BUF_SIZE: usize = 32_768;
 /// in-memory fetch queue, so the backend must bound this before calling send.
 const MAX_OUTSTANDING_BYTES: usize = 512 * 1024;
 
+/// Maximum terminal input retained per PTY, including a write currently
+/// blocked in the OS. Input IPC must remain non-blocking so output ACKs,
+/// detach, and kill commands can still be processed under PTY backpressure.
+const MAX_PENDING_INPUT_BYTES: usize = 512 * 1024;
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalExitedPayload {
@@ -52,10 +57,23 @@ struct TerminalStreamState {
     credit_available: Condvar,
 }
 
+struct TerminalInputQueue {
+    inner: Mutex<TerminalInputState>,
+    input_available: Condvar,
+}
+
+struct TerminalInputState {
+    pending: VecDeque<Vec<u8>>,
+    /// Includes the payload currently owned by `run_writer` until its
+    /// blocking `write_all` completes, keeping the hard byte budget honest.
+    pending_bytes: usize,
+    closed: bool,
+}
+
 struct TerminalInstance {
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    input: Arc<TerminalInputQueue>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    killer: Box<dyn ChildKiller + Send + Sync>,
+    killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     stream: Arc<TerminalStreamState>,
     cwd: Option<PathBuf>,
 }
@@ -204,6 +222,112 @@ impl TerminalStreamState {
     }
 }
 
+impl TerminalInputQueue {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(TerminalInputState {
+                pending: VecDeque::new(),
+                pending_bytes: 0,
+                closed: false,
+            }),
+            input_available: Condvar::new(),
+        }
+    }
+
+    /// Atomically enqueue one logical input payload without waiting for the
+    /// PTY writer. `false` is transient backpressure; errors are terminal.
+    fn enqueue(&self, data: Vec<u8>) -> Result<bool, String> {
+        if data.is_empty() {
+            return Ok(true);
+        }
+        if data.len() > MAX_PENDING_INPUT_BYTES {
+            return Err(format!(
+                "Terminal input exceeds the {} byte limit",
+                MAX_PENDING_INPUT_BYTES
+            ));
+        }
+
+        let mut input = self
+            .inner
+            .lock()
+            .map_err(|error| format!("lock poisoned: {error}"))?;
+        if input.closed {
+            return Err("Terminal input is closed".to_string());
+        }
+        if input.pending_bytes.saturating_add(data.len()) > MAX_PENDING_INPUT_BYTES {
+            return Ok(false);
+        }
+
+        input.pending_bytes += data.len();
+        input.pending.push_back(data);
+        self.input_available.notify_one();
+        Ok(true)
+    }
+
+    fn close(&self) {
+        if let Ok(mut input) = self.inner.lock() {
+            input.closed = true;
+            input.pending.clear();
+            input.pending_bytes = 0;
+        }
+        self.input_available.notify_all();
+    }
+
+    fn run_writer<W: Write>(&self, mut writer: W) {
+        loop {
+            let payload = {
+                let Ok(mut input) = self.inner.lock() else {
+                    return;
+                };
+                loop {
+                    if input.closed {
+                        return;
+                    }
+                    if let Some(payload) = input.pending.pop_front() {
+                        break payload;
+                    }
+                    let Ok(guard) = self.input_available.wait(input) else {
+                        return;
+                    };
+                    input = guard;
+                }
+            };
+
+            let payload_len = payload.len();
+            let write_result = writer.write_all(&payload);
+            let Ok(mut input) = self.inner.lock() else {
+                return;
+            };
+            input.pending_bytes = input.pending_bytes.saturating_sub(payload_len);
+            if write_result.is_err() {
+                input.closed = true;
+                input.pending.clear();
+                input.pending_bytes = 0;
+                self.input_available.notify_all();
+                return;
+            }
+        }
+    }
+}
+
+fn kill_terminal_resources(
+    killer: &Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    input: &TerminalInputQueue,
+    stream: &TerminalStreamState,
+) -> Result<(), String> {
+    // Signal first: on failure the session may still be usable, so preserve
+    // both its input queue and frontend attachment. A successful signal makes
+    // a blocked PTY write fail once the slave closes.
+    killer
+        .lock()
+        .map_err(|error| format!("lock poisoned: {error}"))?
+        .kill()
+        .map_err(|error| error.to_string())?;
+    input.close();
+    stream.deactivate();
+    Ok(())
+}
+
 /// Drain `batch` into the stream (replay + live channel / fallback buffer).
 /// The current attachment may have at most `MAX_OUTSTANDING_BYTES` queued in
 /// Tauri. Waiting before `Channel::send` lets the kernel PTY buffer provide
@@ -303,7 +427,7 @@ impl PtyState {
         }
 
         let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-        let killer = child.clone_killer();
+        let killer = Arc::new(Mutex::new(child.clone_killer()));
         drop(pair.slave);
 
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
@@ -312,9 +436,10 @@ impl PtyState {
         let id = uuid::Uuid::new_v4().to_string();
 
         let stream = Arc::new(TerminalStreamState::new());
+        let input = Arc::new(TerminalInputQueue::new());
 
         let instance = TerminalInstance {
-            writer: Arc::new(Mutex::new(writer)),
+            input: Arc::clone(&input),
             master: Arc::new(Mutex::new(pair.master)),
             killer,
             stream: Arc::clone(&stream),
@@ -326,6 +451,9 @@ impl PtyState {
             .lock()
             .map_err(|e| format!("lock poisoned: {e}"))?
             .insert(id.clone(), instance);
+
+        let writer_input = Arc::clone(&input);
+        std::thread::spawn(move || writer_input.run_writer(writer));
 
         let (reader_done_tx, reader_done_rx) = std::sync::mpsc::sync_channel(1);
         let stream_ref = Arc::clone(&stream);
@@ -356,6 +484,9 @@ impl PtyState {
         let exited_id = id.clone();
         std::thread::spawn(move || {
             let exit_code = child.wait().ok().map(|status| status.exit_code());
+            // Reject new input as soon as the child is known to be gone. The
+            // reader still gets its bounded final-output window below.
+            input.close();
             // Normally the PTY reader observes EOF immediately after the child
             // exits. Give it a short bounded window to deliver final command
             // output before detaching the channel and announcing the stopped
@@ -367,11 +498,8 @@ impl PtyState {
                 .lock()
                 .ok()
                 .and_then(|mut terminals| terminals.remove(&exited_id));
-            if let Some(instance) = removed {
-                instance.stream.deactivate();
-            } else {
-                stream.deactivate();
-            }
+            drop(removed);
+            stream.deactivate();
             on_exit(TerminalExitedPayload {
                 pty_id: exited_id,
                 exit_code,
@@ -424,19 +552,16 @@ impl PtyState {
         Ok(())
     }
 
-    pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
-        // Clone writer Arc, then release the outer terminals lock before
-        // the blocking write_all call. Prevents deadlock on paste + resize.
-        let writer = {
+    pub fn write(&self, id: &str, data: Vec<u8>) -> Result<bool, String> {
+        let input = {
             let terminals = self
                 .inner
                 .terminals
                 .lock()
                 .map_err(|e| format!("lock poisoned: {e}"))?;
-            Arc::clone(&terminals.get(id).ok_or("Terminal not found")?.writer)
+            Arc::clone(&terminals.get(id).ok_or("Terminal not found")?.input)
         };
-        let mut writer = writer.lock().map_err(|e| format!("lock poisoned: {e}"))?;
-        writer.write_all(data).map_err(|e| e.to_string())
+        input.enqueue(data)
     }
 
     pub fn resize(&self, id: &str, rows: u16, cols: u16) -> Result<(), String> {
@@ -462,21 +587,25 @@ impl PtyState {
     }
 
     pub fn kill(&self, id: &str) -> Result<(), String> {
-        let mut terminals = self
-            .inner
-            .terminals
-            .lock()
-            .map_err(|e| format!("lock poisoned: {e}"))?;
-        if let Some(instance) = terminals.get_mut(id) {
-            // Detach and reset credit before killing so a reader waiting for an
-            // ACK wakes and falls back to the bounded detached buffer.
-            instance.stream.deactivate();
-            // Keep the instance addressable until the waiter reaps and removes
-            // it. If signalling fails, propagate the error so the frontend can
-            // restore the session instead of silently orphaning a live child.
-            instance.killer.kill().map_err(|error| error.to_string())?;
-        }
-        Ok(())
+        let Some((killer, input, stream)) = ({
+            let terminals = self
+                .inner
+                .terminals
+                .lock()
+                .map_err(|e| format!("lock poisoned: {e}"))?;
+            terminals.get(id).map(|instance| {
+                (
+                    Arc::clone(&instance.killer),
+                    Arc::clone(&instance.input),
+                    Arc::clone(&instance.stream),
+                )
+            })
+        }) else {
+            return Ok(());
+        };
+
+        // Never hold the global terminal map across a syscall.
+        kill_terminal_resources(&killer, &input, &stream)
     }
 
     /// ANSI-stripped tail of the replay buffer, for static terminal previews
@@ -585,8 +714,356 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    struct BlockingWriter {
+        started: Option<mpsc::Sender<()>>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl Write for BlockingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if let Some(started) = self.started.take() {
+                let _ = started.send(());
+                self.release
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(std::io::Error::other)?;
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct RecordingPartialWriter {
+        writes: mpsc::Sender<Vec<u8>>,
+        max_write_bytes: usize,
+    }
+
+    impl Write for RecordingPartialWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let written = buf.len().min(self.max_write_bytes);
+            self.writes.send(buf[..written].to_vec()).unwrap();
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "test writer closed",
+            ))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct SinkWriter;
+
+    impl Write for SinkWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct ReleasingKiller {
+        release: mpsc::Sender<()>,
+    }
+
+    impl ChildKiller for ReleasingKiller {
+        fn kill(&mut self) -> std::io::Result<()> {
+            self.release.send(()).map_err(std::io::Error::other)
+        }
+
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(self.clone())
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct FailingKiller;
+
+    impl ChildKiller for FailingKiller {
+        fn kill(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("test kill failed"))
+        }
+
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(self.clone())
+        }
+    }
+
     fn accepting_channel() -> Channel<Response> {
         Channel::new(|_| Ok(()))
+    }
+
+    #[test]
+    fn input_enqueue_stays_responsive_while_pty_writer_is_blocked() {
+        let input = Arc::new(TerminalInputQueue::new());
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let writer_input = Arc::clone(&input);
+        let (writer_done_tx, writer_done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            writer_input.run_writer(BlockingWriter {
+                started: Some(started_tx),
+                release: release_rx,
+            });
+            let _ = writer_done_tx.send(());
+        });
+
+        input.enqueue(b"first".to_vec()).unwrap();
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("writer should enter the blocking PTY write");
+
+        let queued_input = Arc::clone(&input);
+        let (enqueue_done_tx, enqueue_done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = enqueue_done_tx.send(queued_input.enqueue(b"second".to_vec()));
+        });
+        enqueue_done_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("enqueue must never wait for the PTY writer")
+            .unwrap();
+
+        release_tx.send(()).unwrap();
+        input.close();
+        writer_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("closing input should stop the writer worker");
+    }
+
+    #[test]
+    fn input_budget_includes_the_blocked_in_flight_write() {
+        let input = Arc::new(TerminalInputQueue::new());
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let writer_input = Arc::clone(&input);
+        let (writer_done_tx, writer_done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            writer_input.run_writer(BlockingWriter {
+                started: Some(started_tx),
+                release: release_rx,
+            });
+            let _ = writer_done_tx.send(());
+        });
+
+        assert!(input.enqueue(vec![b'x'; MAX_PENDING_INPUT_BYTES]).unwrap());
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("writer should own the full-budget payload");
+        assert!(!input.enqueue(vec![b'y']).unwrap());
+        assert_eq!(
+            input.inner.lock().unwrap().pending_bytes,
+            MAX_PENDING_INPUT_BYTES
+        );
+        assert!(input
+            .enqueue(vec![b'z'; MAX_PENDING_INPUT_BYTES + 1])
+            .is_err());
+
+        release_tx.send(()).unwrap();
+        input.close();
+        writer_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("writer should exit after close");
+    }
+
+    #[test]
+    fn input_writer_preserves_fifo_bytes_across_partial_writes() {
+        let input = Arc::new(TerminalInputQueue::new());
+        let (writes_tx, writes_rx) = mpsc::channel();
+        let writer_input = Arc::clone(&input);
+        let (writer_done_tx, writer_done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            writer_input.run_writer(RecordingPartialWriter {
+                writes: writes_tx,
+                max_write_bytes: 3,
+            });
+            let _ = writer_done_tx.send(());
+        });
+
+        let expected = "first-🙂-last".as_bytes().to_vec();
+        assert!(input.enqueue(b"first-".to_vec()).unwrap());
+        assert!(input.enqueue("🙂".as_bytes().to_vec()).unwrap());
+        assert!(input.enqueue(b"-last".to_vec()).unwrap());
+
+        let mut recorded = Vec::new();
+        while recorded.len() < expected.len() {
+            recorded.extend(
+                writes_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("writer should drain every queued byte"),
+            );
+        }
+        assert_eq!(recorded, expected);
+
+        input.close();
+        writer_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("idle writer should wake on close");
+    }
+
+    #[test]
+    fn input_close_wakes_idle_writer_and_rejects_future_input() {
+        let input = Arc::new(TerminalInputQueue::new());
+        let writer_input = Arc::clone(&input);
+        let (writer_done_tx, writer_done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            writer_input.run_writer(SinkWriter);
+            let _ = writer_done_tx.send(());
+        });
+
+        input.close();
+        writer_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("close should wake the idle input worker");
+        assert!(input.enqueue(b"late input".to_vec()).is_err());
+    }
+
+    #[test]
+    fn input_writer_error_closes_and_discards_the_queue() {
+        let input = Arc::new(TerminalInputQueue::new());
+        let writer_input = Arc::clone(&input);
+        let (writer_done_tx, writer_done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            writer_input.run_writer(FailingWriter);
+            let _ = writer_done_tx.send(());
+        });
+
+        assert!(input.enqueue(b"will fail".to_vec()).unwrap());
+        writer_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("writer errors must terminate the worker");
+        let inner = input.inner.lock().unwrap();
+        assert!(inner.closed);
+        assert!(inner.pending.is_empty());
+        assert_eq!(inner.pending_bytes, 0);
+        drop(inner);
+        assert!(input.enqueue(b"late input".to_vec()).is_err());
+    }
+
+    #[test]
+    fn successful_kill_releases_blocked_writer_and_closes_input() {
+        let input = Arc::new(TerminalInputQueue::new());
+        let stream = Arc::new(TerminalStreamState::new());
+        stream
+            .attach("current".to_string(), accepting_channel())
+            .unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let writer_input = Arc::clone(&input);
+        let (writer_done_tx, writer_done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            writer_input.run_writer(BlockingWriter {
+                started: Some(started_tx),
+                release: release_rx,
+            });
+            let _ = writer_done_tx.send(());
+        });
+
+        assert!(input.enqueue(b"blocked".to_vec()).unwrap());
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("writer should enter the blocking PTY write");
+        assert!(input.enqueue(b"discard after kill".to_vec()).unwrap());
+
+        let killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>> =
+            Arc::new(Mutex::new(Box::new(ReleasingKiller {
+                release: release_tx,
+            })));
+        kill_terminal_resources(&killer, &input, &stream).unwrap();
+
+        writer_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("successful kill should release and stop the writer");
+        assert!(input.enqueue(b"late input".to_vec()).is_err());
+        let input_state = input.inner.lock().unwrap();
+        assert!(input_state.closed);
+        assert!(input_state.pending.is_empty());
+        assert_eq!(input_state.pending_bytes, 0);
+        drop(input_state);
+        assert!(stream.inner.lock().unwrap().attachment.is_none());
+    }
+
+    #[test]
+    fn failed_kill_preserves_live_input_and_attachment() {
+        let input = TerminalInputQueue::new();
+        let stream = TerminalStreamState::new();
+        stream
+            .attach("current".to_string(), accepting_channel())
+            .unwrap();
+        let killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>> =
+            Arc::new(Mutex::new(Box::new(FailingKiller)));
+
+        assert!(kill_terminal_resources(&killer, &input, &stream).is_err());
+        assert!(input.enqueue(b"still live".to_vec()).unwrap());
+        assert!(stream.inner.lock().unwrap().attachment.is_some());
+    }
+
+    #[test]
+    fn output_ack_stays_responsive_while_input_writer_is_blocked() {
+        let stream = Arc::new(TerminalStreamState::new());
+        stream
+            .attach("current".to_string(), accepting_channel())
+            .unwrap();
+        stream.inner.lock().unwrap().outstanding_bytes = MAX_OUTSTANDING_BYTES;
+
+        let (flush_done_tx, flush_done_rx) = mpsc::channel();
+        let worker_stream = Arc::clone(&stream);
+        thread::spawn(move || {
+            let mut payload = vec![b'x'; READ_BUF_SIZE];
+            flush_batch(&worker_stream, &mut payload);
+            let _ = flush_done_tx.send(());
+        });
+        assert!(flush_done_rx
+            .recv_timeout(Duration::from_millis(50))
+            .is_err());
+
+        let input = Arc::new(TerminalInputQueue::new());
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let writer_input = Arc::clone(&input);
+        let (writer_done_tx, writer_done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            writer_input.run_writer(BlockingWriter {
+                started: Some(started_tx),
+                release: release_rx,
+            });
+            let _ = writer_done_tx.send(());
+        });
+        input.enqueue(b"blocked input".to_vec()).unwrap();
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("input writer should be blocked");
+
+        input
+            .enqueue(b"queued without blocking IPC".to_vec())
+            .unwrap();
+        assert!(stream.acknowledge("current", READ_BUF_SIZE).unwrap());
+        flush_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("ACK must release output while the PTY input writer is blocked");
+
+        release_tx.send(()).unwrap();
+        input.close();
+        writer_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("writer should exit after the blocked write is released");
     }
 
     #[test]
@@ -916,6 +1393,10 @@ mod tests {
         assert!(
             state.preview(&id, 10).is_err(),
             "exited PTY must be removed"
+        );
+        assert!(
+            state.write(&id, b"late input".to_vec()).is_err(),
+            "exited PTY must reject input"
         );
     }
 

@@ -41,6 +41,7 @@ import {
   normalizeTerminalStatusGlyphs,
 } from "@/lib/terminal-glyph-normalizer";
 import { handleTerminalShortcut } from "@/lib/terminal-shortcuts";
+import { writeTerminalInput } from "@/lib/terminal-input";
 import {
   createTerminalDisplayRepairScheduler,
   refreshTerminalDisplay,
@@ -559,7 +560,7 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
     };
     const onDataDisposable = term.onData((data: string) => {
       if (ptyIdRef.current) {
-        invoke("write_terminal", { id: ptyIdRef.current, data }).catch(() => {
+        writeTerminalInput(ptyIdRef.current, data).catch(() => {
           if (alive) onSpawnError("Terminal process is not responding");
         });
       }
@@ -622,10 +623,18 @@ export function useXtermSession(opts: UseXtermSessionOptions): UseXtermSessionRe
         },
         clearTerminal: () => {
           term.clear();
-          if (ptyIdRef.current) invoke("write_terminal", { id: ptyIdRef.current, data: "\x0c" });
+          if (ptyIdRef.current) {
+            void writeTerminalInput(ptyIdRef.current, "\x0c").catch(() => {
+              if (alive) onSpawnError("Terminal process is not responding");
+            });
+          }
         },
         sendLineFeed: () => {
-          if (ptyIdRef.current) invoke("write_terminal", { id: ptyIdRef.current, data: "\n" });
+          if (ptyIdRef.current) {
+            void writeTerminalInput(ptyIdRef.current, "\n").catch(() => {
+              if (alive) onSpawnError("Terminal process is not responding");
+            });
+          }
         },
       });
     });

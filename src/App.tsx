@@ -48,6 +48,7 @@ import {
   getWorkspaceTerminalsToStop,
   rejectStoppedTerminalSpawn,
 } from "@/lib/terminal-session-lifecycle";
+import { cancelTerminalInput, writeTerminalInput } from "@/lib/terminal-input";
 import {
   buildImportedKorumLayout,
   buildImportedLayout,
@@ -96,6 +97,7 @@ async function killTerminalWithRetry(ptyId: string, attempts = 3): Promise<void>
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       await invoke("kill_terminal", { id: ptyId });
+      cancelTerminalInput(ptyId);
       return;
     } catch (error) {
       lastError = error;
@@ -431,6 +433,7 @@ export default function App() {
 
     listen<TerminalExitedPayload>(TERMINAL_EXITED_EVENT, (event) => {
       if (!alive) return;
+      cancelTerminalInput(event.payload.ptyId);
       const terminal = stateRef.current.windows.find((window) => (
         window.type === "terminal" && window.ptyId === event.payload.ptyId
       ));
@@ -969,7 +972,7 @@ export default function App() {
       if (startCommand) {
         pendingTerminalStartCommandsRef.current.delete(windowId);
         const data = startCommand.endsWith("\n") ? startCommand : `${startCommand}\n`;
-        invoke("write_terminal", { id: ptyId, data }).catch((error) => {
+        writeTerminalInput(ptyId, data).catch((error) => {
           console.warn("[terminal] Demo start command failed:", error);
         });
       }
@@ -1101,7 +1104,9 @@ export default function App() {
       const data = request.bracketedPasteMode
         ? `\x1b[200~${request.text}\x1b[201~`
         : request.text;
-      invoke("write_terminal", { id: request.ptyId, data }).catch(() => {});
+      writeTerminalInput(request.ptyId, data).catch((error) => {
+        console.warn("[terminal] Paste failed:", error);
+      });
     }
   }, []);
 
@@ -1111,7 +1116,9 @@ export default function App() {
     const data = req.bracketedPasteMode
       ? `\x1b[200~${req.text}\x1b[201~`
       : req.text;
-    invoke("write_terminal", { id: req.ptyId, data }).catch(() => {});
+    writeTerminalInput(req.ptyId, data).catch((error) => {
+      console.warn("[terminal] Paste failed:", error);
+    });
     setPasteConfirmState(null);
   }, [pasteConfirmState]);
 
