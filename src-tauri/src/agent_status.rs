@@ -3,12 +3,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 pub const AGENT_STATUS_CHANGED_EVENT: &str = "korum://agent-status-changed";
@@ -16,6 +17,7 @@ pub const AGENT_STATUS_CHANGED_EVENT: &str = "korum://agent-status-changed";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const CLAUDE_SUCCESS_CACHE_MS: u64 = 10_000;
 const CLAUDE_ERROR_BACKOFF_MS: u64 = 10_000;
+const USER_SHELL_PATH_TIMEOUT: Duration = Duration::from_secs(2);
 const RECENT_SCROLLBACK_LINES: usize = 80;
 const WAITING_TAIL_LINES: usize = 12;
 const AGENT_PROBE_SCROLLBACK_BYTES: usize = 32_768;
@@ -742,7 +744,7 @@ fn fetch_claude_agents() -> Result<Vec<ClaudeAgentRecord>, String> {
     // A macOS app launched from Finder/Dock only inherits a minimal PATH, so a
     // bare `claude` lookup fails even though the user's terminal finds it. Give
     // the child the PATH a real login shell would build.
-    if let Some(path) = claude_env_path() {
+    if let Some(path) = cli_env_path() {
         command.env("PATH", path);
     }
 
@@ -758,11 +760,11 @@ fn fetch_claude_agents() -> Result<Vec<ClaudeAgentRecord>, String> {
     parse_claude_agents_json(&raw)
 }
 
-/// PATH to use when spawning `claude`: the interactive login shell's PATH (which
+/// PATH to use when spawning user-installed CLIs: the interactive login shell's PATH (which
 /// carries version-manager shims like nvm/fnm/volta/asdf) first, then common
 /// static install dirs, then whatever the app process already had. Built once and
 /// cached — see [`user_shell_path`].
-fn claude_env_path() -> Option<String> {
+pub(crate) fn cli_env_path() -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     if let Some(resolved) = user_shell_path() {
         parts.push(resolved.to_string());
@@ -795,14 +797,42 @@ fn user_shell_path() -> Option<&'static str> {
                 .filter(|shell| shell.starts_with('/'))
                 .unwrap_or_else(|| "/bin/zsh".to_string());
             // Sentinel-wrap the value so noisy rc/profile output can't corrupt it.
-            let output = Command::new(&shell)
+            let mut child = Command::new(&shell)
                 .args(["-ilc", "printf '__KORUM_PATH__%s__KORUM_END__' \"$PATH\""])
-                .output()
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
                 .ok()?;
-            if !output.status.success() {
+            let stdout = child.stdout.take()?;
+            let (sender, receiver) = std::sync::mpsc::channel();
+            thread::spawn(move || {
+                let mut bytes = Vec::new();
+                let result = stdout
+                    .take(64 * 1024)
+                    .read_to_end(&mut bytes)
+                    .ok()
+                    .map(|_| bytes);
+                let _ = sender.send(result);
+            });
+            let deadline = Instant::now() + USER_SHELL_PATH_TIMEOUT;
+            let status = loop {
+                match child.try_wait().ok()? {
+                    Some(status) => break status,
+                    None if Instant::now() >= deadline => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return None;
+                    }
+                    None => thread::sleep(Duration::from_millis(20)),
+                }
+            };
+            if !status.success() {
                 return None;
             }
-            let text = String::from_utf8_lossy(&output.stdout);
+            let remaining = deadline.checked_duration_since(Instant::now())?;
+            let bytes = receiver.recv_timeout(remaining).ok()??;
+            let text = String::from_utf8_lossy(&bytes);
             let start = text.find("__KORUM_PATH__")? + "__KORUM_PATH__".len();
             let end = start + text[start..].find("__KORUM_END__")?;
             let path = text[start..end].trim();

@@ -1,4 +1,10 @@
-import type { ClaudeUsageResponse, ExtraUsage } from "@/types";
+import type {
+  ClaudeUsageResponse,
+  CodexIndividualLimit,
+  CodexUsageBucket,
+  CodexUsageResponse,
+  ExtraUsage,
+} from "@/types";
 
 type PartialClaudeUsageResponse = Partial<ClaudeUsageResponse> | null;
 
@@ -30,6 +36,53 @@ export function hasClaudeUsage(claude: PartialClaudeUsageResponse): boolean {
       claude.seven_day_cowork != null ||
       claude.extra_usage?.is_enabled === true),
   );
+}
+
+export function hasCodexUsage(codex: Partial<CodexUsageResponse> | null): boolean {
+  return Boolean(
+    typeof codex?.rate_limit_reset_credits === "number"
+    || codex?.limits?.some((limit) =>
+      limit.primary_window != null
+      || limit.secondary_window != null
+      || limit.credits?.has_credits === true
+      || limit.individual_limit != null
+      || limit.plan_type != null
+      || limit.rate_limit_reached_type != null,
+    ),
+  );
+}
+
+export function getCodexWindowLabel(
+  bucket: Pick<CodexUsageBucket, "window_duration_minutes">,
+  fallback: string,
+): string {
+  const minutes = bucket.window_duration_minutes;
+  if (minutes === 300) return "5 hour";
+  if (minutes === 1440) return "Daily";
+  if (minutes === 10080) return "Weekly";
+  if (minutes === 43200) return "Monthly";
+  if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) return fallback;
+  if (minutes % 1440 === 0) return `${String(minutes / 1440)} day`;
+  if (minutes % 60 === 0) return `${String(minutes / 60)} hour`;
+  return `${String(minutes)} min`;
+}
+
+export function getCodexSpendUsedPercent(limit: CodexIndividualLimit): number {
+  return Math.round(Math.max(0, Math.min(100, 100 - limit.remaining_percent)));
+}
+
+export function formatCodexPlanType(planType: string): string {
+  if (planType.toLowerCase() === "prolite") return "Pro Lite";
+  return planType
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+export function formatRateLimitReachedType(value: string): string {
+  return value
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function isUsageRateLimited(error: unknown): boolean {
