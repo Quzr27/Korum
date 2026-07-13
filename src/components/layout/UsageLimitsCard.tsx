@@ -17,9 +17,19 @@ import {
   loadCached,
   saveCache,
 } from "@/lib/usage-cache";
-import { getExtraUsagePercent, hasClaudeUsage, isUsageRateLimited } from "@/lib/usage-limits";
+import {
+  formatCodexPlanType,
+  formatRateLimitReachedType,
+  getCodexSpendUsedPercent,
+  getCodexWindowLabel,
+  getExtraUsagePercent,
+  hasClaudeUsage,
+  hasCodexUsage,
+  isUsageRateLimited,
+} from "@/lib/usage-limits";
 import type {
   ClaudeUsageResponse,
+  CodexUsageLimit,
   CodexUsageResponse,
   ExtraUsage,
   UsageBucket,
@@ -31,7 +41,8 @@ clearLegacyUsageCache();
 // Module-level state survives component remount (toggle off/on)
 let claudeBackoffUntil = 0;
 let codexBackoffUntil = 0;
-let fetchInFlight = false;
+let claudeFetchInFlight: Promise<ClaudeUsageResponse> | null = null;
+let codexFetchInFlight: Promise<CodexUsageResponse> | null = null;
 
 function formatTimeUntil(isoString: string | null | undefined): string {
   if (!isoString) return "";
@@ -125,6 +136,64 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+function MetadataRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2 text-[10px]">
+      <span className="truncate text-foreground/68">{label}</span>
+      <span className="shrink-0 truncate text-right text-muted-foreground/62">{value}</span>
+    </div>
+  );
+}
+
+function CodexLimitRows({ limit, showName }: { limit: CodexUsageLimit; showName: boolean }) {
+  const spend = limit.individual_limit;
+  const spendPercent = spend ? getCodexSpendUsedPercent(spend) : null;
+  const credits = limit.credits;
+  return (
+    <div className="flex flex-col gap-2">
+      {showName ? (
+        <span className="truncate text-[10px] font-medium text-foreground/70">
+          {limit.limit_name ?? limit.limit_id ?? "Additional limit"}
+        </span>
+      ) : null}
+      {limit.primary_window ? (
+        <UsageRow
+          label={getCodexWindowLabel(limit.primary_window, "Usage")}
+          bucket={limit.primary_window}
+        />
+      ) : null}
+      {limit.secondary_window ? (
+        <UsageRow
+          label={getCodexWindowLabel(limit.secondary_window, "Secondary")}
+          bucket={limit.secondary_window}
+        />
+      ) : null}
+      {spend && spendPercent !== null ? (
+        <div className="flex flex-col gap-1">
+          <MetadataRow label="Spend" value={`${spend.used}/${spend.limit}`} />
+          <Progress
+            value={spendPercent}
+            className="h-1 bg-primary/10 dark:bg-primary/12 [&_[data-slot=progress-indicator]]:bg-primary/60 dark:[&_[data-slot=progress-indicator]]:bg-primary/45"
+            aria-label={`Spend ${String(spendPercent)}%`}
+          />
+        </div>
+      ) : null}
+      {credits?.has_credits ? (
+        <MetadataRow
+          label="Credits"
+          value={credits.unlimited ? "Unlimited" : credits.balance ?? "Available"}
+        />
+      ) : null}
+      {limit.rate_limit_reached_type ? (
+        <MetadataRow
+          label="Limit reached"
+          value={formatRateLimitReachedType(limit.rate_limit_reached_type)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 export default function UsageLimitsCard() {
   const { settings } = useSettings();
   const [claude, setClaude] = useState<ClaudeUsageResponse | null>(
@@ -140,52 +209,43 @@ export default function UsageLimitsCard() {
     // races that a useRef mountedRef would have under module-level fetchInFlight.
     let alive = true;
 
-    const fetchAll = async () => {
-      if (fetchInFlight) return;
-      fetchInFlight = true;
+    const fetchClaude = async () => {
+      if (isCacheFresh(CACHE_KEY_CLAUDE) || Date.now() < claudeBackoffUntil) return;
+      const request = claudeFetchInFlight ?? invoke<ClaudeUsageResponse>("fetch_claude_usage");
+      claudeFetchInFlight = request;
       try {
-        const now = Date.now();
-
-        // Claude: skip if cache fresh OR in backoff window
-        const skipClaude = isCacheFresh(CACHE_KEY_CLAUDE) || now < claudeBackoffUntil;
-        const claudePromise = skipClaude
-          ? Promise.resolve(null)
-          : invoke<ClaudeUsageResponse>("fetch_claude_usage").catch((err: unknown) => {
-              if (isUsageRateLimited(err)) {
-                claudeBackoffUntil = Date.now() + USAGE_BACKOFF_INTERVAL;
-              }
-              return null;
-            });
-
-        // Codex: skip if cache fresh OR in backoff window
-        const skipCodex = isCacheFresh(CACHE_KEY_CODEX) || now < codexBackoffUntil;
-        const codexPromise = skipCodex
-          ? Promise.resolve(null)
-          : invoke<CodexUsageResponse>("fetch_codex_usage").catch((err: unknown) => {
-              if (isUsageRateLimited(err)) {
-                codexBackoffUntil = Date.now() + USAGE_BACKOFF_INTERVAL;
-              }
-              return null;
-            });
-
-        const [claudeResult, codexResult] = await Promise.all([claudePromise, codexPromise]);
-        if (!alive) return;
-
-        if (claudeResult) {
-          setClaude(claudeResult);
-          saveCache(CACHE_KEY_CLAUDE, claudeResult);
-        }
-        if (codexResult) {
-          setCodex(codexResult);
-          saveCache(CACHE_KEY_CODEX, codexResult);
-        }
+        const result = await request;
+        saveCache(CACHE_KEY_CLAUDE, result);
+        if (alive) setClaude(result);
+      } catch (error) {
+        if (isUsageRateLimited(error)) claudeBackoffUntil = Date.now() + USAGE_BACKOFF_INTERVAL;
       } finally {
-        fetchInFlight = false;
+        if (claudeFetchInFlight === request) claudeFetchInFlight = null;
       }
     };
 
-    void fetchAll();
-    const id = setInterval(() => void fetchAll(), USAGE_POLL_INTERVAL);
+    const fetchCodex = async () => {
+      if (isCacheFresh(CACHE_KEY_CODEX) || Date.now() < codexBackoffUntil) return;
+      const request = codexFetchInFlight ?? invoke<CodexUsageResponse>("fetch_codex_usage");
+      codexFetchInFlight = request;
+      try {
+        const result = await request;
+        saveCache(CACHE_KEY_CODEX, result);
+        if (alive) setCodex(result);
+      } catch (error) {
+        if (isUsageRateLimited(error)) codexBackoffUntil = Date.now() + USAGE_BACKOFF_INTERVAL;
+      } finally {
+        if (codexFetchInFlight === request) codexFetchInFlight = null;
+      }
+    };
+
+    const fetchAll = () => {
+      void fetchClaude();
+      void fetchCodex();
+    };
+
+    fetchAll();
+    const id = setInterval(fetchAll, USAGE_POLL_INTERVAL);
     return () => {
       alive = false;
       clearInterval(id);
@@ -193,7 +253,7 @@ export default function UsageLimitsCard() {
   }, [settings.showUsageLimits]);
 
   const hasClaude = hasClaudeUsage(claude);
-  const hasCodex = codex && (codex.primary_window ?? codex.secondary_window);
+  const hasCodex = hasCodexUsage(codex);
 
   if (!settings.showUsageLimits || (!hasClaude && !hasCodex)) return null;
 
@@ -243,11 +303,18 @@ export default function UsageLimitsCard() {
         {hasCodex ? (
           <div className="flex flex-col gap-2">
             <SectionLabel>Codex</SectionLabel>
-            {codex.primary_window ? (
-              <UsageRow label="Session" bucket={codex.primary_window} />
+            {codex?.limits.map((limit, index) => (
+              <CodexLimitRows
+                key={limit.limit_id ?? `${limit.limit_name ?? "limit"}-${String(index)}`}
+                limit={limit}
+                showName={index > 0}
+              />
+            ))}
+            {typeof codex?.rate_limit_reset_credits === "number" ? (
+              <MetadataRow label="Resets" value={String(codex.rate_limit_reset_credits)} />
             ) : null}
-            {codex.secondary_window ? (
-              <UsageRow label="Weekly" bucket={codex.secondary_window} />
+            {codex?.limits[0]?.plan_type ? (
+              <MetadataRow label="Plan" value={formatCodexPlanType(codex.limits[0].plan_type)} />
             ) : null}
           </div>
         ) : null}

@@ -2,7 +2,8 @@ export const USAGE_POLL_INTERVAL = 5 * 60 * 1000;
 export const USAGE_BACKOFF_INTERVAL = 10 * 60 * 1000;
 // v3: extra_usage fields can be null, new cowork/omelette buckets added.
 export const CACHE_KEY_CLAUDE = "korum-usage-claude-v3";
-export const CACHE_KEY_CODEX = "korum-usage-codex";
+// v2: Codex app-server returns multiple named limits, window durations, and credits.
+export const CACHE_KEY_CODEX = "korum-usage-codex-v2";
 
 export interface CachedUsage<T> {
   data: T;
@@ -32,6 +33,7 @@ export function clearLegacyUsageCache(): void {
   try {
     localStorage.removeItem("korum-usage-claude");
     localStorage.removeItem("korum-usage-claude-v2");
+    localStorage.removeItem("korum-usage-codex");
   } catch {
     // noop
   }

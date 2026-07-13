@@ -163,9 +163,36 @@ export interface ClaudeUsageResponse {
 }
 
 export interface CodexUsageResponse {
-  primary_window: UsageBucket | null;
-  secondary_window: UsageBucket | null;
+  limits: CodexUsageLimit[];
+  rate_limit_reset_credits: number | null;
+}
+
+export interface CodexUsageBucket extends UsageBucket {
+  window_duration_minutes: number | null;
+}
+
+export interface CodexCredits {
+  has_credits: boolean;
+  unlimited: boolean;
+  balance: string | null;
+}
+
+export interface CodexIndividualLimit {
+  limit: string;
+  used: string;
+  remaining_percent: number;
+  resets_at: string | null;
+}
+
+export interface CodexUsageLimit {
+  limit_id: string | null;
+  limit_name: string | null;
+  primary_window: CodexUsageBucket | null;
+  secondary_window: CodexUsageBucket | null;
+  credits: CodexCredits | null;
+  individual_limit: CodexIndividualLimit | null;
   plan_type: string | null;
+  rate_limit_reached_type: string | null;
 }
 
 export const WORKSPACE_COLORS: Record<WorkspaceColor, string> = {
