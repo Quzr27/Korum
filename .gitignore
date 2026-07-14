@@ -30,6 +30,7 @@ Thumbs.db
 
 # Claude Code
 .claude/
+.codex/
 CLAUDE.md
 skills-lock.json
 

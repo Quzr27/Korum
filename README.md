@@ -7,7 +7,7 @@ Drag, resize, zoom — organize your workflow spatially instead of switching bet
 
 ![Korum spatial terminal workspace](korum-v0.4.1-screenshot.png)
 
-> **v0.4.4** — early release. macOS only for now.
+> **v0.4.5** — early release. macOS only for now.
 
 ## Status
 
@@ -25,6 +25,7 @@ Korum is currently in early release. Right now, the focus is stability, persiste
 - **Code viewer with diffs** — inspect files with Shiki highlighting, inline changes, minimap, and line targeting.
 - **Project file tree** — browse workspaces with git status, search, file actions, active file reveal, and worktree-aware session grouping.
 - **Built for large sessions** — keeps 50+ terminals responsive with viewport-aware rendering and staggered attachment.
+- **Usage limits** — track Claude and Codex rate-limit windows, including multiple Codex limits and reset credits, directly in the workspace.
 
 ## Install
 
