@@ -4,6 +4,23 @@ All notable changes to Korum will be documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.5] - 2026-07-14
+
+### Added
+- **Modern Codex usage limits** — usage tracking now reads the current Codex app-server rate-limit contract and displays multiple limit windows with reset credits when available.
+- **Memory profiling** — a dedicated profiling command captures Korum, WebContent, GPU, and descendant-process memory for repeatable runtime comparisons.
+
+### Changed
+- **Terminal memory and lifecycle** — viewport-aware attachment, session reuse, token caching, file-tree updates, and backend PTY streaming now retain less work and memory across large workspaces.
+- **Usage limit presentation** — the usage card and cache model now support nullable and multi-window Codex limits without coupling them to Claude usage state.
+
+### Fixed
+- **Terminal input stability** — PTY input uses bounded queued writes so slow or blocked child processes cannot freeze the command path or grow memory without limit.
+- **Terminal teardown and rendering** — xterm sessions detach and dispose more predictably while preserving live PTYs, reducing stale renderer state during repeated viewport and workspace changes.
+
+### Internal
+- Added focused frontend and Rust coverage for terminal lifecycle, bounded input queues, xterm sessions, usage-limit normalization, caching, and multi-limit rendering.
+
 ## [0.4.4] - 2026-07-09
 
 ### Added
